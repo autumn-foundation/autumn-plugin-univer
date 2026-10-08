@@ -267,6 +267,11 @@ The system tests use a real Chromium, the default Autumn CSP and CSRF.
 - The formula engine runs on the main thread. There is no web worker.
 - Without JavaScript, the page shows a `<noscript>` notice.
 
+## Roadmap
+
+Docs, slides, optional Univer features and xlsx/docx exchange are planned.
+See [`docs/roadmap.md`](docs/roadmap.md).
+
 ## License
 
 Apache-2.0. The bundled packages keep their own licenses; see

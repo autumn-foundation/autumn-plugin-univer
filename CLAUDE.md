@@ -18,6 +18,7 @@ Autumn (autumn-web 0.8) plugin that serves Univer 1.0 spreadsheets.
 - `tests/system.rs` — Chromium tests (`--features system-tests`).
 - `examples/univer_demo.rs` — demo app.
 - `docs/plan.md`, `docs/adr/` — plan, AC, decisions.
+- `docs/roadmap.md` — phases for docs, slides, extras and file exchange.
 
 ## Commands
 
