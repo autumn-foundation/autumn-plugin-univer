@@ -113,7 +113,7 @@ mod tests {
             .map(|a| a.logical_path().to_owned())
             .filter(|p| p.starts_with("chunks/"))
             .collect();
-        assert!(!chunks.is_empty());
+        assert_ne!(chunks, Vec::<String>::new(), "the bundle has lazy chunks");
         for chunk in chunks {
             client
                 .get(&format!("/static/_plugins/univer/{chunk}"))

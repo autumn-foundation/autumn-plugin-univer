@@ -1088,7 +1088,10 @@ mod tests {
                 vec![Some(CellValue::Number(3.0)), None],
             ]
         );
-        assert!(Sheet::new("e", "E").to_rows().is_empty());
+        assert_eq!(
+            Sheet::new("e", "E").to_rows(),
+            Vec::<Vec<Option<CellValue>>>::new()
+        );
     }
 
     #[test]
