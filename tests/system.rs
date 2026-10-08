@@ -799,3 +799,90 @@ async fn a_locale_missing_from_the_build_is_not_fetched() {
     assert!(!fetched, "no request for a missing locale file");
     page.expect_no_console_errors().await.expect("no 404");
 }
+
+#[tokio::test]
+async fn a_remount_during_a_mount_renders() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/htmx").await.expect("visit");
+    // Dispose and mount again after createUniver, before ready.
+    let _: bool = eval(
+        &page,
+        "(async () => { const slot = document.getElementById('slot'); await new Promise((res) => { const mo = new MutationObserver(() => { const el = document.getElementById('sheet'); if (el && el.querySelector('canvas') && el.getAttribute('data-univer-state') === 'loading') { mo.disconnect(); AutumnUniver.dispose(el); AutumnUniver.mount(el); res(); } }); mo.observe(slot, { childList: true, subtree: true }); document.getElementById('load').click(); }); return true; })()",
+    )
+    .await;
+    wait_state(&page, "sheet", "ready").await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let canvases: u32 = eval(&page, "document.querySelectorAll('#sheet canvas').length").await;
+    assert!(canvases > 0, "the new instance keeps its DOM");
+    page.expect_no_console_errors()
+        .await
+        .expect("clean console");
+}
+
+#[tokio::test]
+async fn a_reattached_sheet_keeps_its_unsaved_edits() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/manual/reattach").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "typed")).await;
+    wait_state(&page, "sheet", "dirty").await;
+    let _: bool = eval(
+        &page,
+        "(() => { const el = document.getElementById('sheet'); el.remove(); setTimeout(() => document.body.prepend(el), 100); return true; })()",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for(
+        &page,
+        "AutumnUniver.get(document.getElementById('sheet')) !== undefined",
+    )
+    .await;
+    let a2: String = eval(&page, &value_js("sheet", "A2")).await;
+    assert_eq!(a2, "typed", "the re-mount uses the last snapshot");
+    wait_state(&page, "sheet", "dirty").await;
+}
+
+#[tokio::test]
+async fn dispose_sends_no_duplicate_of_an_in_flight_save() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/slow/dup").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "only")).await;
+    wait_state(&page, "sheet", "saving").await;
+    let _: bool = eval(
+        &page,
+        "(AutumnUniver.dispose(document.getElementById('sheet')), true)",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(slow("dup").0, ["only"], "one request per version");
+}
+
+#[tokio::test]
+async fn unload_flushes_a_save_queued_by_dispose() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/slow/unload").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "first")).await;
+    wait_state(&page, "sheet", "saving").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "second")).await;
+    let _: bool = eval(
+        &page,
+        "(AutumnUniver.dispose(document.getElementById('sheet')), true)",
+    )
+    .await;
+    page.visit("/empty").await.expect("leave the page");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !slow("unload").0.contains(&"second".to_owned()) {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "saves: {:?}",
+            slow("unload")
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}

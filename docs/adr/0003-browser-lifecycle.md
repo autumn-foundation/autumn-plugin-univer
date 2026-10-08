@@ -32,9 +32,16 @@ inline code. System tests found three Univer 1.0 behaviors:
 - JS maps track mounted and mounting sheets (not DOM markers). Each mount
   has a token; a dispose or a removal during a mount frees the new
   instance. A copy of live markup (htmx history) mounts again.
+- Each mount renders into its own host node. A stale mount tears down
+  only its own detached node, after its Rendered stage (Univer throws on
+  an earlier dispose).
+- Dispose keeps the last snapshot per element. A re-mount of the same
+  element (a script moved it) starts from it, so it shows no stale data.
 - Saves run in one ordered chain per sheet. Waiting calls share one
   request. Dispose queues the last snapshot after the save in progress.
-  Only `pagehide` uses `keepalive`, with one byte budget for all sheets.
+  Dispose skips a version that the save in progress already holds.
+  Only `pagehide` uses `keepalive`, with one byte budget for all sheets;
+  it also sends saves that dispose queued.
 - Load and save URLs must be same-origin; saves use `redirect: "error"`.
 - Multi-sheet pages: only the active sheet (last `pointerdown` or
   `focusin`) keeps Univer's element ids. The others get the suffix

@@ -21,6 +21,11 @@ const KEEPALIVE_MAX = 60000; // Browsers share 64 KiB for all keepalive bodies.
 
 const states = new Map(); // element -> state of a mounted sheet
 const mounting = new Map(); // element -> token of a mount in progress
+// element -> { json, dirty }: the last snapshot of a disposed sheet. A
+// re-mount of the same element (a script moved it) starts from it.
+const carried = new WeakMap();
+// Saves that dispose queued behind a save in progress. pagehide sends them.
+const pending = new Set();
 
 function attr(el, name) {
   return el.getAttribute("data-univer-" + name);
@@ -135,18 +140,25 @@ async function mount(el) {
   if (states.has(el) || mounting.has(el)) return;
   const token = {};
   mounting.set(el, token);
-  const container = mountNode(el);
-  // Markup copied from a live sheet (htmx history) holds dead Univer DOM.
-  if (container !== el) container.replaceChildren();
+  // Each mount gets its own host node. A stale mount then tears down only
+  // its own (detached) node, never the DOM of a newer mount. This also
+  // drops dead Univer DOM from markup copied from a live sheet.
+  const host = document.createElement("div");
+  host.className = "autumn-univer-host";
+  mountNode(el).replaceChildren(host);
   el.setAttribute("data-univer-init", "");
   setState(el, "loading");
   const height = attr(el, "height");
   if (height && CSS_LENGTH.test(height)) el.style.height = height;
   const live = () => mounting.get(el) === token && el.isConnected;
-  let univer = null;
+  const carry = carried.get(el);
+  carried.delete(el);
   try {
-    const [data, locale] = await Promise.all([loadData(el), loadLocale(attr(el, "locale") || "en-US")]);
-    if (!live()) return abort(el, token, univer);
+    const [data, locale] = await Promise.all([
+      carry ? JSON.parse(carry.json) : loadData(el),
+      loadLocale(attr(el, "locale") || "en-US"),
+    ]);
+    if (!live()) return abort(el, token);
     const type = locale.code.replace("-", ""); // LocaleType: "en-US" -> "enUS"
     const created = LIB.createUniver({
       locale: type,
@@ -154,7 +166,7 @@ async function mount(el) {
       darkMode: has(el, "dark"),
       presets: [
         LIB.UniverSheetsCorePreset({
-          container,
+          container: host,
           header: shown(el, "header"),
           toolbar: shown(el, "toolbar"),
           footer: shown(el, "footer"),
@@ -163,7 +175,8 @@ async function mount(el) {
         }),
       ],
     });
-    univer = created.univer;
+    token.univer = created.univer;
+    const univer = created.univer;
     const { univerAPI } = created;
     const workbook = univerAPI.createWorkbook(data);
     const readOnly = has(el, "readonly");
@@ -171,13 +184,13 @@ async function mount(el) {
     // input on the frames after it.
     await whenStage(univerAPI, RENDERED);
     await nextFrames(2);
-    if (!live()) return abort(el, token, univer);
+    if (!live()) return abort(el, token);
     if (readOnly) {
       // setEditable alone does not block typing in Univer 1.0; the
       // permission mode blocks both the UI and the facade API.
       workbook.setEditable(false);
       await workbook.getWorkbookPermission().setReadOnly();
-      if (!live()) return abort(el, token, univer);
+      if (!live()) return abort(el, token);
     }
     const state = {
       univer,
@@ -194,6 +207,7 @@ async function mount(el) {
       force: false, // the queued save runs even with no new edits
       subscription: null,
     };
+    if (carry && carry.dirty) state.version = 1; // unsaved manual edits
     mounting.delete(el);
     states.set(el, state);
     const unitId = workbook.getId();
@@ -208,11 +222,13 @@ async function mount(el) {
     if (states.size > 1) activate(active && states.has(active) ? active : el, true);
     setState(el, "ready");
     emit(el, "ready", { univerAPI, workbook });
+    if (dirty(state)) setState(el, "dirty");
   } catch (error) {
-    if (!live()) return abort(el, token, univer);
+    if (!live()) return abort(el, token);
     mounting.delete(el);
-    freeUniver(univer);
-    container.replaceChildren();
+    freeUniver(token.univer);
+    token.univer = null;
+    host.remove();
     console.error("autumn-univer: mount failed", error);
     setState(el, "error");
     emit(el, "error", { error });
@@ -220,8 +236,9 @@ async function mount(el) {
 }
 
 // Stops a mount that a dispose or a removal made stale.
-function abort(el, token, univer) {
-  freeUniver(univer);
+function abort(el, token) {
+  freeUniver(token.univer);
+  token.univer = null;
   if (mounting.get(el) === token) {
     mounting.delete(el);
     clearMarkers(el);
@@ -295,7 +312,15 @@ function save(el, options = {}) {
     const force = state.force;
     state.force = false;
     if (!dirty(state) && !force) return true;
-    return send(el, state, JSON.stringify(state.workbook.save()), state.version);
+    let body;
+    try {
+      body = JSON.stringify(state.workbook.save());
+    } catch (error) {
+      setState(el, "error");
+      emit(el, "save-error", { error });
+      return false;
+    }
+    return send(el, state, body, state.version);
   });
   state.queued = run;
   state.chain = run.catch(() => false);
@@ -306,7 +331,9 @@ function save(el, options = {}) {
 // first, after any save in progress.
 function dispose(el) {
   if (mounting.has(el)) {
-    mounting.delete(el); // The mount sees this and frees its instance.
+    // The mount sees this at its next step and frees its instance. (Univer
+    // throws if an instance goes before its Rendered stage.)
+    mounting.delete(el);
     clearMarkers(el);
     return;
   }
@@ -316,10 +343,24 @@ function dispose(el) {
     return;
   }
   clearTimeout(state.timer);
-  if (state.saveUrl && state.autosave > 0 && !state.readOnly && dirty(state)) {
-    const body = JSON.stringify(state.workbook.save());
-    const version = state.version;
-    state.chain = state.chain.then(() => send(el, state, body, version));
+  let json = null;
+  try {
+    json = JSON.stringify(state.workbook.save());
+  } catch (error) {
+    console.warn("autumn-univer: no snapshot at dispose", error);
+  }
+  const autosave = state.saveUrl && state.autosave > 0 && !state.readOnly;
+  if (json !== null) carried.set(el, { json, dirty: !autosave && dirty(state) });
+  if (json !== null && autosave && dirty(state)) {
+    const entry = { el, state, body: json, version: state.version, done: false };
+    pending.add(entry);
+    state.chain = state.chain.then(() => {
+      if (entry.done) return true;
+      entry.done = true;
+      pending.delete(entry);
+      // The save in progress may already hold this version.
+      return state.savedVersion >= entry.version ? true : send(el, state, json, entry.version);
+    });
   }
   states.delete(el);
   if (active === el) active = null;
@@ -390,14 +431,23 @@ document.addEventListener("click", (event) => {
 // cap all keepalive bodies together, so count bytes over all sheets.
 window.addEventListener("pagehide", () => {
   let budget = KEEPALIVE_MAX;
+  const keep = (body) => {
+    const size = new Blob([body]).size;
+    const fits = size <= budget;
+    if (fits) budget -= size;
+    return fits;
+  };
+  // Saves of disposed sheets that still wait behind a save in progress.
+  for (const entry of [...pending]) {
+    entry.done = true;
+    pending.delete(entry);
+    send(entry.el, entry.state, entry.body, entry.version, keep(entry.body));
+  }
   for (const [el, state] of states) {
     if (!state.saveUrl || state.autosave <= 0 || state.readOnly || !dirty(state)) continue;
     clearTimeout(state.timer);
     const body = JSON.stringify(state.workbook.save());
-    const size = new Blob([body]).size;
-    const keepalive = size <= budget;
-    if (keepalive) budget -= size;
-    send(el, state, body, state.version, keepalive);
+    send(el, state, body, state.version, keep(body));
   }
 });
 // Manual-save sheets with unsaved edits: ask before the page unloads.

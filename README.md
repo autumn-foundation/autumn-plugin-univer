@@ -86,7 +86,7 @@ open the htmx scratch sheet.
 | `.workbook(&wb)` | `<script type="application/json">` | empty sheet | Data in the page. The JSON is escaped against `</script>`. |
 | `.load_url(url)` | `data-univer-load-url` | — | `GET` the workbook JSON instead. |
 | `.save_url(url)` | `data-univer-save-url` | — | `POST` the snapshot JSON after edits. Same origin only. |
-| `.autosave(d)` | `data-univer-autosave` | 1 s | Delay after the last edit (1 ms to 2³¹−1 ms). Needs `save_url`. |
+| `.autosave(d)` | `data-univer-autosave` | 1 s | Delay after the last edit (1 ms to 2³¹−1 ms; zero means manual save). Needs `save_url`. |
 | `.manual_save()` | `data-univer-autosave="0"` | — | Save only with `save_button` or `AutumnUniver.save`. Needs `save_url`. |
 | `.height(css)` | `data-univer-height` | `480px` | A CSS length: `px`, `em`, `rem`, `vh`, `vw` or `%`. Other text is ignored. |
 | `.label(text)` | `aria-label` | — | The accessible name of the region. |
@@ -111,9 +111,11 @@ request has `Content-Type: application/json` and the CSRF header from
 `WorkbookSnapshot` reads the body and checks it (Problem Details):
 
 - `415`: the content type is not JSON.
-- `413`: the body is over 8 MiB (`WorkbookSnapshot::MAX_BYTES`).
+- `413`: the body is over 8 MiB (`WorkbookSnapshot::MAX_BYTES`) or over
+  the app body limit (`security.upload.max_request_size_bytes`).
 - `400`: the body is not JSON.
 - `422`: the JSON is not a workbook, or it breaks an invariant or limit.
+  The message names the JSON path, for example `sheets.s.cellData.0.0.v`.
 
 The invariants:
 

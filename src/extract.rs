@@ -1,6 +1,7 @@
 //! [`WorkbookSnapshot`]: reads and validates a saved workbook.
 
 use autumn_web::AutumnError;
+use autumn_web::reexports::axum::RequestExt as _;
 use autumn_web::reexports::axum::body::to_bytes;
 use autumn_web::reexports::axum::extract::{FromRequest, Request};
 use autumn_web::reexports::http::{StatusCode, header};
@@ -62,9 +63,10 @@ where
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.split(';').next())
             .map(str::trim)
+            .map(str::to_ascii_lowercase)
             .is_some_and(|mime| {
-                mime.eq_ignore_ascii_case("application/json")
-                    || mime.to_ascii_lowercase().ends_with("+json")
+                mime == "application/json"
+                    || (mime.starts_with("application/") && mime.ends_with("+json"))
             });
         if !is_json {
             return Err(AutumnError::bad_request_msg(
@@ -72,7 +74,8 @@ where
             )
             .with_status(StatusCode::UNSUPPORTED_MEDIA_TYPE));
         }
-        let bytes = to_bytes(req.into_body(), Self::MAX_BYTES)
+        // The limited body also keeps the app's own body limit, if lower.
+        let bytes = to_bytes(req.into_limited_body(), Self::MAX_BYTES)
             .await
             .map_err(|err| {
                 let message = err.to_string();
@@ -83,14 +86,19 @@ where
                 };
                 AutumnError::bad_request_msg(message).with_status(status)
             })?;
-        let workbook: Workbook = serde_json::from_slice(&bytes).map_err(|err| {
-            let status = if err.is_data() {
+        // The error names the JSON path, for example `sheets.s.cellData.0.0.v`.
+        let mut de = serde_json::Deserializer::from_slice(&bytes);
+        let workbook: Workbook = serde_path_to_error::deserialize(&mut de).map_err(|err| {
+            let status = if err.inner().is_data() {
                 StatusCode::UNPROCESSABLE_ENTITY
             } else {
                 StatusCode::BAD_REQUEST
             };
             AutumnError::bad_request_msg(err.to_string()).with_status(status)
         })?;
+        // `serde_json::from_slice` also rejects trailing characters.
+        de.end()
+            .map_err(|err| AutumnError::bad_request_msg(err.to_string()))?;
         workbook.validate().map_err(AutumnError::unprocessable)?;
         Ok(Self(workbook))
     }
@@ -194,6 +202,62 @@ mod tests {
             .send()
             .await
             .assert_status(415);
+    }
+
+    #[tokio::test]
+    async fn keeps_the_app_body_limit_when_it_is_lower() {
+        let mut config = autumn_web::config::AutumnConfig::default();
+        config.security.upload.max_request_size_bytes = 1024;
+        let body = format!(r#"{{"id":"w","pad":"{}"}}"#, "x".repeat(4096));
+        TestApp::new()
+            .config(config)
+            .routes(routes![save])
+            .build()
+            .post("/save")
+            .header("content-type", "application/json")
+            .body(body)
+            .send()
+            .await
+            .assert_status(413);
+    }
+
+    #[tokio::test]
+    async fn errors_name_the_json_path() {
+        let response = post(&json!({
+            "id": "w", "sheetOrder": ["s"],
+            "sheets": { "s": { "id": "s", "cellData": { "0": { "0": { "v": [1] } } } } }
+        }))
+        .await;
+        response.assert_status(422);
+        assert!(
+            response.text().contains("sheets.s.cellData"),
+            "{}",
+            response.text()
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_trailing_characters_with_400() {
+        client()
+            .post("/save")
+            .header("content-type", "application/json")
+            .body(r#"{"id":"w"} x"#)
+            .send()
+            .await
+            .assert_status(400);
+    }
+
+    #[tokio::test]
+    async fn rejects_non_application_json_suffixes() {
+        for ct in ["text/x+json", "+json"] {
+            client()
+                .post("/save")
+                .header("content-type", ct)
+                .body(r#"{"id":"w"}"#)
+                .send()
+                .await
+                .assert_status(415);
+        }
     }
 
     #[tokio::test]

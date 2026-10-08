@@ -103,8 +103,9 @@ impl Spreadsheet {
     }
 
     /// Sets the autosave delay after the last edit. The default is 1 s.
-    /// The delay is kept in 1 ms to 2³¹−1 ms (the browser timer range). It
-    /// has an effect only with a [`Spreadsheet::save_url`].
+    /// The delay is kept in 1 ms to 2³¹−1 ms (the browser timer range);
+    /// `Duration::ZERO` means manual save. It has an effect only with a
+    /// [`Spreadsheet::save_url`].
     pub const fn autosave(mut self, delay: Duration) -> Self {
         self.autosave = Some(delay);
         self
