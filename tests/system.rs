@@ -167,6 +167,77 @@ async fn empty() -> Markup {
     html! { p id="gone" { "Cleared" } }
 }
 
+/// Values of A2 that each slow save carried, in arrival order, plus the
+/// highest number of saves in flight at once.
+#[derive(Default)]
+struct SlowLog {
+    a2: Vec<String>,
+    in_flight: usize,
+    max_in_flight: usize,
+}
+
+fn slow_log() -> &'static Mutex<HashMap<String, SlowLog>> {
+    static LOG: OnceLock<Mutex<HashMap<String, SlowLog>>> = OnceLock::new();
+    LOG.get_or_init(Mutex::default)
+}
+
+/// Like `/save`, but takes 400 ms and logs each request.
+#[post("/slow-save/{key}")]
+async fn slow_save(Path(key): Path<String>, WorkbookSnapshot(wb): WorkbookSnapshot) -> Json<bool> {
+    {
+        let mut log = slow_log().lock().expect("lock");
+        let entry = log.entry(key.clone()).or_default();
+        entry.in_flight += 1;
+        entry.max_in_flight = entry.max_in_flight.max(entry.in_flight);
+    }
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let a2 = match wb.first_sheet().and_then(|s| s.value(1, 0)) {
+        Some(autumn_plugin_univer::CellValue::Text(t)) => t.clone(),
+        other => format!("{other:?}"),
+    };
+    let mut log = slow_log().lock().expect("lock");
+    let entry = log.entry(key.clone()).or_default();
+    entry.in_flight -= 1;
+    entry.a2.push(a2);
+    drop(log);
+    saved().lock().expect("lock").insert(key, wb);
+    Json(true)
+}
+
+#[get("/slow/{key}")]
+async fn slow_page(Path(key): Path<String>, csrf: Option<CsrfToken>) -> Markup {
+    let sheet = Spreadsheet::new("sheet")
+        .workbook(&seed(&key))
+        .save_url(format!("/slow-save/{key}"))
+        .autosave(Duration::from_millis(50));
+    layout(
+        csrf.as_ref(),
+        &html! { (sheet) (save_button("sheet", "Save")) div id="other" {} },
+    )
+}
+
+#[get("/bad-data")]
+async fn bad_data_page(csrf: Option<CsrfToken>) -> Markup {
+    layout(
+        csrf.as_ref(),
+        &html! {
+            div id="sheet" class="autumn-univer" data-univer {
+                script type="application/json" data-univer-data { "null" }
+                div data-univer-mount {}
+            }
+        },
+    )
+}
+
+#[get("/cross-origin")]
+async fn cross_origin_page(csrf: Option<CsrfToken>) -> Markup {
+    let sheet = Spreadsheet::new("sheet")
+        .workbook(&seed("xo"))
+        .save_url("https://evil.example/steal")
+        .autosave(Duration::from_millis(50));
+    layout(csrf.as_ref(), &html! { (sheet) })
+}
+
 #[post("/save/{key}")]
 async fn save(Path(key): Path<String>, WorkbookSnapshot(wb): WorkbookSnapshot) -> Json<bool> {
     saved().lock().expect("lock").insert(key, wb);
@@ -196,7 +267,11 @@ async fn start() -> SystemTestRunner {
             htmx_page,
             fragment,
             empty,
-            save
+            save,
+            slow_save,
+            slow_page,
+            bad_data_page,
+            cross_origin_page
         ]);
     #[cfg(feature = "locale-fr-fr")]
     {
@@ -502,4 +577,183 @@ async fn htmx_swaps_mount_and_cleanup_disposes() {
     page.expect_no_console_errors()
         .await
         .expect("clean console");
+}
+
+fn slow(key: &str) -> (Vec<String>, usize) {
+    slow_log()
+        .lock()
+        .expect("lock")
+        .get(key)
+        .map(|l| (l.a2.clone(), l.max_in_flight))
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn edits_during_a_save_and_before_dispose_all_arrive_in_order() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/slow/race").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "first")).await;
+    wait_state(&page, "sheet", "saving").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "second")).await;
+    // Remove the sheet while the first save is in flight.
+    let _: bool = eval(&page, "(document.getElementById('sheet').remove(), true)").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while slow("race").0.len() < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "saves: {:?}",
+            slow("race")
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (values, max_in_flight) = slow("race");
+    assert_eq!(values, ["first", "second"], "no edit is lost");
+    assert_eq!(max_in_flight, 1, "one save at a time");
+    assert_eq!(
+        saved_cell("race", 1, 0),
+        Some("second".into()),
+        "newest data wins"
+    );
+}
+
+#[tokio::test]
+async fn rapid_manual_saves_run_one_at_a_time() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/slow/rapid").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "v1")).await;
+    wait_state(&page, "sheet", "saving").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "v2")).await;
+    for _ in 0..3 {
+        page.click("Save").await.expect("click");
+    }
+    wait_state(&page, "sheet", "saved").await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let (values, max_in_flight) = slow("rapid");
+    assert_eq!(max_in_flight, 1, "saves never overlap: {values:?}");
+    assert_eq!(values.last().map(String::as_str), Some("v2"), "{values:?}");
+    assert!(
+        values.len() <= 3,
+        "queued clicks share one save: {values:?}"
+    );
+    assert_eq!(saved_cell("rapid", 1, 0), Some("v2".into()));
+}
+
+#[tokio::test]
+async fn a_copy_of_mounted_markup_mounts_again() {
+    // htmx history restores a copy of the live DOM, markers and all.
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/sheet/copy").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(
+        &page,
+        "(() => { const el = document.getElementById('sheet'); const html = el.outerHTML; el.remove(); document.body.insertAdjacentHTML('beforeend', html); return true; })()",
+    )
+    .await;
+    wait_for(
+        &page,
+        "AutumnUniver.get(document.getElementById('sheet')) !== undefined",
+    )
+    .await;
+    wait_state(&page, "sheet", "ready").await;
+    let canvases: u32 = eval(&page, "document.querySelectorAll('#sheet canvas').length").await;
+    assert!(
+        canvases > 0 && canvases < 10,
+        "one live instance: {canvases} canvases"
+    );
+}
+
+#[tokio::test]
+async fn a_sheet_moved_later_mounts_again() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/sheet/moved").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(
+        &page,
+        "(() => { const el = document.getElementById('sheet'); el.remove(); setTimeout(() => document.body.append(el), 50); return true; })()",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_state(&page, "sheet", "ready").await;
+    wait_for(
+        &page,
+        "AutumnUniver.get(document.getElementById('sheet')) !== undefined",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn dispose_during_loading_stops_the_mount() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/htmx").await.expect("visit");
+    page.click("#load").await.expect("click load");
+    // Dispose as soon as the mount starts.
+    wait_for(
+        &page,
+        "document.getElementById('sheet')?.getAttribute('data-univer-state') === 'loading'",
+    )
+    .await;
+    let _: bool = eval(
+        &page,
+        "(window.__el = document.getElementById('sheet'), AutumnUniver.dispose(window.__el), true)",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let cleared: bool = eval(
+        &page,
+        "window.__el.getAttribute('data-univer-state') === null",
+    )
+    .await;
+    assert!(cleared, "no ready after dispose");
+    let gone: bool = eval(&page, "AutumnUniver.get(window.__el) === undefined").await;
+    assert!(gone);
+    // A new mount works.
+    let _: bool = eval(&page, "(AutumnUniver.mount(window.__el), true)").await;
+    wait_state(&page, "sheet", "ready").await;
+    let canvases: u32 = eval(&page, "document.querySelectorAll('#sheet canvas').length").await;
+    assert!(
+        canvases > 0 && canvases < 10,
+        "one live instance: {canvases} canvases"
+    );
+}
+
+#[tokio::test]
+async fn bad_data_fails_cleanly() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/bad-data").await.expect("visit");
+    wait_state(&page, "sheet", "error").await;
+    let children: u32 = eval(
+        &page,
+        "document.querySelector('#sheet [data-univer-mount]').children.length",
+    )
+    .await;
+    assert_eq!(children, 0, "the failed instance is freed");
+}
+
+#[tokio::test]
+async fn a_cross_origin_save_url_is_refused() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/cross-origin").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(&page, &set_js("sheet", "A2", "secret")).await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let state: String = eval(
+        &page,
+        "document.getElementById('sheet').getAttribute('data-univer-state')",
+    )
+    .await;
+    assert_eq!(state, "dirty", "no save request");
+    let errors = page.console_errors();
+    assert!(
+        errors.iter().any(|e| e.contains("not a same-origin URL")),
+        "{errors:?}"
+    );
 }
