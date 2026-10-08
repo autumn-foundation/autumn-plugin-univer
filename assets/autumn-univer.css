@@ -1,0 +1,18 @@
+/* autumn-plugin-univer: layout of the Spreadsheet mount markup. */
+.autumn-univer {
+  position: relative;
+  display: block;
+  height: 480px;
+  min-height: 200px;
+  overflow: hidden;
+}
+
+.autumn-univer > [data-univer-mount] {
+  position: absolute;
+  inset: 0;
+}
+
+.autumn-univer > noscript p {
+  margin: 0;
+  padding: 1rem;
+}

@@ -174,9 +174,48 @@ impl Spreadsheet {
         self
     }
 
+    /// The autosave delay in milliseconds, if the sheet saves.
+    fn autosave_ms(&self) -> Option<u128> {
+        self.save_url
+            .as_ref()
+            .map(|_| self.autosave.unwrap_or(DEFAULT_AUTOSAVE).as_millis())
+    }
+
     /// Renders the markup.
     pub fn render(&self) -> Markup {
-        html! {}
+        let off = |show: bool| (!show).then_some("false");
+        let load_url = match &self.source {
+            Source::Url(url) => Some(url.as_str()),
+            Source::Empty | Source::Inline(_) => None,
+        };
+        html! {
+            div id=[(!self.id.is_empty()).then_some(&self.id)]
+                class="autumn-univer"
+                role="region"
+                aria-label=[self.label.as_deref()]
+                data-univer
+                data-univer-locale=(self.locale.code())
+                data-univer-height=[self.height.as_deref()]
+                data-univer-readonly[self.read_only]
+                data-univer-dark[self.dark_mode]
+                data-univer-header=[off(self.header)]
+                data-univer-toolbar=[off(self.toolbar)]
+                data-univer-footer=[off(self.footer)]
+                data-univer-formula-bar=[off(self.formula_bar)]
+                data-univer-context-menu=[off(self.context_menu)]
+                data-univer-load-url=[load_url]
+                data-univer-save-url=[self.save_url.as_deref()]
+                data-univer-autosave=[self.autosave_ms()]
+            {
+                @if let Source::Inline(json) = &self.source {
+                    script type="application/json" data-univer-data {
+                        (PreEscaped(escape_json(json)))
+                    }
+                }
+                div class="autumn-univer-mount" data-univer-mount {}
+                noscript { p { "This spreadsheet needs JavaScript." } }
+            }
+        }
     }
 }
 
@@ -197,14 +236,22 @@ impl Render for Spreadsheet {
 /// assert!(html.contains(r#"data-univer-save-for="budget""#));
 /// ```
 pub fn save_button(spreadsheet_id: &str, label: &str) -> Markup {
-    let _ = (spreadsheet_id, label);
-    html! {}
+    html! {
+        button type="button" class="autumn-univer-save" data-univer-save-for=(spreadsheet_id) {
+            (label)
+        }
+    }
 }
 
 /// `true` for a plain CSS length: a number and one unit, or a percentage.
 fn is_css_length(s: &str) -> bool {
-    let _ = s;
-    false
+    const UNITS: [&str; 6] = ["px", "rem", "em", "vh", "vw", "%"];
+    let Some(number) = UNITS.iter().find_map(|u| s.strip_suffix(u)) else {
+        return false;
+    };
+    let (whole, frac) = number.split_once('.').unwrap_or((number, "0"));
+    let digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    digits(whole) && digits(frac)
 }
 
 /// Escapes JSON for a `<script type="application/json">` block.
@@ -213,7 +260,18 @@ fn is_css_length(s: &str) -> bool {
 /// treat `<!--` as special. JSON allows `\u` escapes in strings, and these
 /// characters occur only in strings, so the escape keeps the data equal.
 fn escape_json(json: &str) -> String {
-    json.to_owned()
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        match c {
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
