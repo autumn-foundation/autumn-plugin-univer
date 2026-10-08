@@ -55,4 +55,11 @@ fn uses_no_unsafe_dom_or_eval() {
 #[test]
 fn read_only_sheets_block_edits() {
     assert!(INIT.contains("setEditable(false)"));
+    assert!(INIT.contains("getWorkbookPermission().setReadOnly()"), "blocks typing too");
+}
+
+#[test]
+fn counts_only_mutations_of_its_own_workbook() {
+    assert!(INIT.contains("event.type !== MUTATION"));
+    assert!(INIT.contains("event.params.unitId !== unitId"));
 }

@@ -12,6 +12,7 @@ const LIB = globalThis.AutumnUniverLib;
 const PREFIX = "autumn-univer:";
 const SELECTOR = "[data-univer]";
 const MUTATION = 2; // Univer CommandType.MUTATION
+const RENDERED = 2; // Univer LifecycleStages.Rendered
 const CSS_LENGTH = /^\d+(\.\d+)?(px|rem|em|vh|vw|%)$/;
 const KEEPALIVE_MAX = 60000; // Browsers cap keepalive bodies at 64 KiB.
 
@@ -43,6 +44,18 @@ function csrfHeaders() {
   const meta = document.querySelector('meta[name="csrf-token"], meta[name="autumn-csrf-token"]');
   if (!meta) return {};
   return { [meta.getAttribute("data-header") || "X-CSRF-Token"]: meta.getAttribute("content") || "" };
+}
+
+// Resolves when the Univer instance reaches `stage` (LifecycleStages).
+function whenStage(univerAPI, stage) {
+  if (univerAPI.getCurrentLifecycleStage() >= stage) return Promise.resolve();
+  return new Promise((resolve) => {
+    const subscription = univerAPI.addEvent(univerAPI.Event.LifeCycleChanged, (event) => {
+      if (event.stage < stage) return;
+      subscription.dispose();
+      resolve();
+    });
+  });
 }
 
 async function loadLocale(code) {
@@ -106,7 +119,14 @@ async function mount(el) {
     });
     const workbook = univerAPI.createWorkbook(data);
     const readOnly = has(el, "readonly");
-    if (readOnly) workbook.setEditable(false);
+    // Univer resets permissions until the Rendered stage.
+    await whenStage(univerAPI, RENDERED);
+    if (readOnly) {
+      // setEditable alone does not block typing in Univer 1.0; the
+      // permission mode blocks both the UI and the facade API.
+      workbook.setEditable(false);
+      await workbook.getWorkbookPermission().setReadOnly();
+    }
     const state = {
       univer,
       univerAPI,
@@ -121,11 +141,12 @@ async function mount(el) {
       subscription: null,
     };
     states.set(el, state);
-    // Formula results load after mount. Count edits from the next task.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    if (states.get(el) !== state) return;
+    const unitId = workbook.getId();
+    // Count only mutations of this workbook. The cell editor (a doc unit)
+    // and the formula engine also send mutations; they change no data.
     state.subscription = univerAPI.addEvent(univerAPI.Event.CommandExecuted, (event) => {
       if (event.type !== MUTATION || state.readOnly) return;
+      if (!event.params || event.params.unitId !== unitId) return;
       if (event.options && (event.options.onlyLocal || event.options.fromCollab)) return;
       onChange(el, state);
     });
