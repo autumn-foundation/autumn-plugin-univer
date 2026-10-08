@@ -84,7 +84,10 @@ mod tests {
         let client = client();
         let init = client.get(&url(INIT_JS)).send().await;
         init.assert_ok().assert_header("content-type", JS);
-        assert!(init.text().contains("data-univer"), "init.js scans the marker");
+        assert!(
+            init.text().contains("data-univer"),
+            "init.js scans the marker"
+        );
         client
             .get(&url(PLUGIN_CSS))
             .send()
@@ -128,7 +131,9 @@ mod tests {
         for path in [UNIVER_JS, INIT_JS, UNIVER_CSS, PLUGIN_CSS] {
             let plain = format!("/static/_plugins/univer/{path}");
             let response = client.get(&plain).send().await;
-            response.assert_ok().assert_header("cache-control", REVALIDATE);
+            response
+                .assert_ok()
+                .assert_header("cache-control", REVALIDATE);
             let etag = response.header("etag").expect("etag").to_owned();
             client
                 .get(&plain)
@@ -179,7 +184,11 @@ mod tests {
             .iter()
             .filter(|i| i.path.starts_with("/static/_plugins/univer/"))
             .collect();
-        assert_eq!(routes.len(), UNIVER_ASSETS.iter().count() * 2, "two URLs per file");
+        assert_eq!(
+            routes.len(),
+            UNIVER_ASSETS.iter().count() * 2,
+            "two URLs per file"
+        );
         for info in routes {
             assert_eq!(info.method, "GET");
             assert_eq!(info.classification, RouteClassification::Public);

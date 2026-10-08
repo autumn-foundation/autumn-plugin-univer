@@ -211,7 +211,10 @@ mod tests {
     fn codes_round_trip() {
         for &l in Locale::all() {
             assert_eq!(l.code().parse::<Locale>(), Ok(l));
-            assert_eq!(l.code().to_lowercase().replace('-', "_").parse::<Locale>(), Ok(l));
+            assert_eq!(
+                l.code().to_lowercase().replace('-', "_").parse::<Locale>(),
+                Ok(l)
+            );
         }
     }
 
@@ -229,7 +232,9 @@ mod tests {
         for &l in Locale::all() {
             let prefix = format!("chunks/{}-", l.code());
             assert!(
-                UNIVER_ASSETS.iter().any(|a| a.logical_path().starts_with(&prefix)),
+                UNIVER_ASSETS
+                    .iter()
+                    .any(|a| a.logical_path().starts_with(&prefix)),
                 "{l} has a bundled chunk"
             );
         }

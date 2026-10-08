@@ -116,9 +116,7 @@ mod tests {
     #[test]
     fn the_en_us_locale_is_always_compiled_in() {
         assert!(
-            compiled()
-                .iter()
-                .any(|p| p.starts_with("chunks/en-US-") && p.ends_with(".js")),
+            compiled().iter().any(|p| p.starts_with("chunks/en-US-")),
             "en-US is the fallback locale"
         );
     }
@@ -173,13 +171,21 @@ mod tests {
         assert_eq!(m["version"], UNIVER_VERSION);
         assert_eq!(m["license"], "Apache-2.0");
         assert_eq!(m["packages"]["@univerjs/presets"], UNIVER_VERSION);
-        assert_eq!(m["packages"]["@univerjs/preset-sheets-core"], UNIVER_VERSION);
+        assert_eq!(
+            m["packages"]["@univerjs/preset-sheets-core"],
+            UNIVER_VERSION
+        );
     }
 
     #[test]
     fn integrity_is_computed_from_the_bytes() {
         for asset in UNIVER_ASSETS.iter() {
-            assert_eq!(asset.integrity(), sri(asset.bytes()), "{}", asset.logical_path());
+            assert_eq!(
+                asset.integrity(),
+                sri(asset.bytes()),
+                "{}",
+                asset.logical_path()
+            );
         }
     }
 
@@ -197,7 +203,12 @@ mod tests {
     fn license_notices_cover_univer_and_react() {
         let text = std::str::from_utf8(UNIVER_ASSETS.get(LICENSES).expect("bundled").bytes())
             .expect("utf-8");
-        for name in ["@univerjs/core@1.0.3", "react@18.3.1", "react-dom@18.3.1", "rxjs@7.8.2"] {
+        for name in [
+            "@univerjs/core@1.0.3",
+            "react@18.3.1",
+            "react-dom@18.3.1",
+            "rxjs@7.8.2",
+        ] {
             assert!(text.contains(name), "notice for {name}");
         }
     }

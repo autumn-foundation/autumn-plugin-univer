@@ -14,7 +14,7 @@ use crate::locale::Locale;
 use crate::workbook::Workbook;
 
 /// The autosave delay when the app sets a save URL and no delay.
-const DEFAULT_AUTOSAVE: Duration = Duration::from_millis(1000);
+const DEFAULT_AUTOSAVE: Duration = Duration::from_secs(1);
 
 /// Where the workbook data comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +42,7 @@ enum Source {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use]
+#[allow(clippy::struct_excessive_bools)] // One flag per Univer UI option.
 pub struct Spreadsheet {
     id: String,
     label: Option<String>,
@@ -182,6 +183,7 @@ impl Spreadsheet {
     }
 
     /// Renders the markup.
+    #[must_use]
     pub fn render(&self) -> Markup {
         let off = |show: bool| (!show).then_some("false");
         let load_url = match &self.source {
@@ -235,6 +237,7 @@ impl Render for Spreadsheet {
 /// let html = save_button("budget", "Save").into_string();
 /// assert!(html.contains(r#"data-univer-save-for="budget""#));
 /// ```
+#[must_use]
 pub fn save_button(spreadsheet_id: &str, label: &str) -> Markup {
     html! {
         button type="button" class="autumn-univer-save" data-univer-save-for=(spreadsheet_id) {
@@ -321,7 +324,10 @@ mod tests {
         assert!(!out.contains("style="), "{out}");
         assert!(!out.contains("onclick"), "{out}");
         assert_eq!(out.matches("<script").count(), 1, "{out}");
-        assert!(out.contains(r#"<script type="application/json" data-univer-data>"#), "{out}");
+        assert!(
+            out.contains(r#"<script type="application/json" data-univer-data>"#),
+            "{out}"
+        );
     }
 
     #[test]
@@ -357,7 +363,10 @@ mod tests {
         ] {
             assert!(out.contains(want), "{want} in {out}");
         }
-        assert!(!out.contains("data-univer-data"), "load URL replaces inline data: {out}");
+        assert!(
+            !out.contains("data-univer-data"),
+            "load URL replaces inline data: {out}"
+        );
     }
 
     #[test]
@@ -412,7 +421,16 @@ mod tests {
 
     #[test]
     fn invalid_heights_are_ignored() {
-        for bad in ["", "480", "red", "1px; color: red", "-5px", "10 px", "calc(1px)", "1e3px"] {
+        for bad in [
+            "",
+            "480",
+            "red",
+            "1px; color: red",
+            "-5px",
+            "10 px",
+            "calc(1px)",
+            "1e3px",
+        ] {
             let out = html(&Spreadsheet::new("s").height(bad));
             assert!(!out.contains("data-univer-height"), "{bad:?}: {out}");
         }

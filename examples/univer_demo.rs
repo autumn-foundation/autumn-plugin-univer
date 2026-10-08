@@ -59,7 +59,11 @@ fn seed_budget() -> Workbook {
         last = row;
     }
     sheet.set_cell(last + 1, 0, Cell::text("Total").with_style("bold"));
-    sheet.set_cell(last + 1, 1, Cell::formula(format!("=SUM(B2:B{})", last + 1)).with_style("bold"));
+    sheet.set_cell(
+        last + 1,
+        1,
+        Cell::formula(format!("=SUM(B2:B{})", last + 1)).with_style("bold"),
+    );
     Workbook::builder("budget", "Budget")
         .sheet(sheet)
         .style("bold", serde_json::json!({ "bl": 1 }))
@@ -71,7 +75,14 @@ fn seed_budget() -> Workbook {
 async fn main() {
     autumn_web::app()
         .plugin(UniverPlugin::new())
-        .routes(routes![index, report, scratch, save_budget, save_scratch, budget_json])
+        .routes(routes![
+            index,
+            report,
+            scratch,
+            save_budget,
+            save_scratch,
+            budget_json
+        ])
         .run()
         .await;
 }
@@ -103,7 +114,9 @@ fn layout(title: &str, csrf: Option<&CsrfToken>, content: &Markup) -> Markup {
 
 #[get("/")]
 async fn index(csrf: Option<CsrfToken>) -> Markup {
-    let budget = store().lock().map(|s| s.budget.clone()).unwrap_or_else(|_| seed_budget());
+    let budget = store()
+        .lock()
+        .map_or_else(|_| seed_budget(), |s| s.budget.clone());
     let sheet = Spreadsheet::new("budget")
         .label("Monthly budget")
         .workbook(&budget)
@@ -130,8 +143,7 @@ async fn index(csrf: Option<CsrfToken>) -> Markup {
 async fn scratch() -> Markup {
     let workbook = store()
         .lock()
-        .map(|s| s.scratch.clone())
-        .unwrap_or_else(|_| Workbook::empty("scratch"));
+        .map_or_else(|_| Workbook::empty("scratch"), |s| s.scratch.clone());
     html! {
         h2 { "Scratch sheet" }
         (Spreadsheet::new("scratch")
@@ -147,7 +159,9 @@ async fn scratch() -> Markup {
 
 #[get("/report")]
 async fn report(csrf: Option<CsrfToken>) -> Markup {
-    let budget = store().lock().map(|s| s.budget.clone()).unwrap_or_else(|_| seed_budget());
+    let budget = store()
+        .lock()
+        .map_or_else(|_| seed_budget(), |s| s.budget.clone());
     let rows = budget.first_sheet().map(Sheet::to_rows).unwrap_or_default();
     layout(
         "Report",
@@ -181,7 +195,11 @@ fn show(value: Option<&CellValue>) -> String {
 
 #[get("/budget.json")]
 async fn budget_json() -> Json<Workbook> {
-    Json(store().lock().map(|s| s.budget.clone()).unwrap_or_else(|_| seed_budget()))
+    Json(
+        store()
+            .lock()
+            .map_or_else(|_| seed_budget(), |s| s.budget.clone()),
+    )
 }
 
 #[post("/budget")]

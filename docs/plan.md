@@ -83,7 +83,7 @@ counter-measure.
 1. **AC1** `UniverPlugin` installs one `PluginAssets` bundle (namespace
    `univer`). Files serve under `/static/_plugins/univer/` with hashed,
    immutable URLs, SRI, ETag/304. The plugin passes Autumn conformance.
-2. **AC2** `univer_head()` renders the stylesheet and module-script tags
+2. **AC2** `univer_stylesheet()` and `univer_script()` render the stylesheet and module-script tags
    with SRI, in the correct order.
 3. **AC3** A typed `Spreadsheet` builder renders the mount markup:
    id, height, locale, read-only, dark mode, UI toggles, inline data or

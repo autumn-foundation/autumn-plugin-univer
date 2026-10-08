@@ -8,11 +8,11 @@ license = "Apache-2.0"
 repository = "https://github.com/autumn-foundation/autumn-plugin-univer"
 keywords = ["autumn", "univer", "spreadsheet", "htmx", "plugin"]
 categories = ["web-programming"]
-exclude = [".github/", "docs/", "vendor/", "CLAUDE.md", "clippy.toml", "tests/"]
+exclude = [".github/", "docs/", "vendor/", "CLAUDE.md", "clippy.toml"]
 
 [features]
 default = []
-# Lazy locale packs (en-US is always in). Each adds about 0.8 MB.
+# Lazy locale packs (en-US is always in). Each adds about 0.7 MB.
 locale-ar-sa = []
 locale-ca-es = []
 locale-de-de = []
@@ -32,7 +32,7 @@ locale-zh-cn = []
 locale-zh-hk = []
 locale-zh-tw = []
 all-locales = ["locale-ar-sa", "locale-ca-es", "locale-de-de", "locale-es-es", "locale-fa-ir", "locale-fr-fr", "locale-id-id", "locale-it-it", "locale-ja-jp", "locale-ko-kr", "locale-pl-pl", "locale-pt-br", "locale-ru-ru", "locale-sk-sk", "locale-vi-vn", "locale-zh-cn", "locale-zh-hk", "locale-zh-tw"]
-# Hyphenation patterns for rich text (about 3 MB). Sheets seldom need them.
+# Hyphenation patterns for rich text (about 4.6 MB). Sheets seldom need them.
 hyphenation = []
 # Internal: Chromium system tests of this crate. Not for host apps.
 system-tests = ["autumn-web/system-tests"]

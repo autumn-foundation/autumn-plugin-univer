@@ -331,7 +331,8 @@ mod cell_matrix {
     }
 
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<CellMatrix, D::Error> {
-        let raw = Option::<BTreeMap<String, Option<BTreeMap<String, Option<Cell>>>>>::deserialize(d)?;
+        let raw =
+            Option::<BTreeMap<String, Option<BTreeMap<String, Option<Cell>>>>>::deserialize(d)?;
         let mut out = CellMatrix::new();
         for (r, row) in raw.unwrap_or_default() {
             let r: u32 = r
@@ -415,7 +416,9 @@ impl Sheet {
     {
         rows.into_iter()
             .zip(0_u32..)
-            .fold(Self::new(id, name), |sheet, (cells, r)| sheet.with_row(r, cells))
+            .fold(Self::new(id, name), |sheet, (cells, r)| {
+                sheet.with_row(r, cells)
+            })
     }
 
     /// Sets one cell. The sheet grows to hold it.
@@ -549,10 +552,16 @@ impl Sheet {
         }
         for (at, cell) in self.cells() {
             if at.row >= self.row_count || at.col >= self.column_count {
-                return Err(WorkbookError::CellOutOfBounds { sheet: key.clone(), cell: at });
+                return Err(WorkbookError::CellOutOfBounds {
+                    sheet: key.clone(),
+                    cell: at,
+                });
             }
             if matches!(cell.value, Some(CellValue::Number(n)) if !n.is_finite()) {
-                return Err(WorkbookError::NonFiniteNumber { sheet: key.clone(), cell: at });
+                return Err(WorkbookError::NonFiniteNumber {
+                    sheet: key.clone(),
+                    cell: at,
+                });
             }
         }
         Ok(())
@@ -776,7 +785,9 @@ impl Workbook {
             sheet.validate(key, limits)?;
             total = total.saturating_add(sheet.cell_count());
             if total > limits.max_cells {
-                return Err(WorkbookError::TooManyCells { max: limits.max_cells });
+                return Err(WorkbookError::TooManyCells {
+                    max: limits.max_cells,
+                });
             }
         }
         Ok(())
@@ -859,7 +870,7 @@ mod tests {
     use serde_json::json;
 
     /// A snapshot that Univer 1.0.3 wrote (`FWorkbook.save()`), trimmed.
-    const UNIVER_SNAPSHOT: &str = r##"{
+    const UNIVER_SNAPSHOT: &str = r#"{
         "id": "wb0",
         "sheetOrder": ["s1", "s2"],
         "name": "Budget",
@@ -887,7 +898,7 @@ mod tests {
             "s2": { "id": "s2", "name": "Empty", "cellData": {} }
         },
         "resources": [{ "name": "SHEET_DEFINED_NAME_PLUGIN", "data": "" }]
-    }"##;
+    }"#;
 
     fn snapshot() -> Workbook {
         serde_json::from_str(UNIVER_SNAPSHOT).expect("parses")
@@ -912,9 +923,15 @@ mod tests {
         let s1 = wb.sheet("s1").expect("s1");
         assert_eq!((s1.row_count, s1.column_count), (20, 5));
         assert_eq!(s1.value(0, 0), Some(&CellValue::Number(42.0)));
-        assert_eq!(s1.cell(0, 1).and_then(|c| c.formula.as_deref()), Some("=A1*2"));
+        assert_eq!(
+            s1.cell(0, 1).and_then(|c| c.formula.as_deref()),
+            Some("=A1*2")
+        );
         assert_eq!(s1.value(1, 0), Some(&CellValue::Text("hello".into())));
-        assert_eq!(s1.cell(1, 0).and_then(|c| c.style.clone()), Some(json!("Ab12")));
+        assert_eq!(
+            s1.cell(1, 0).and_then(|c| c.style.clone()),
+            Some(json!("Ab12"))
+        );
         assert_eq!(s1.value(2, 4), Some(&CellValue::Bool(true)));
         assert_eq!(s1.cell(0, 0).and_then(|c| c.kind), Some(CellType::Number));
         assert_eq!(s1.cell_count(), 4, "empty rows are dropped");
@@ -924,7 +941,10 @@ mod tests {
     #[test]
     fn missing_sizes_take_univer_defaults() {
         let s2 = snapshot().sheets.remove(&SheetId::new("s2")).expect("s2");
-        assert_eq!((s2.row_count, s2.column_count), (DEFAULT_ROWS, DEFAULT_COLUMNS));
+        assert_eq!(
+            (s2.row_count, s2.column_count),
+            (DEFAULT_ROWS, DEFAULT_COLUMNS)
+        );
     }
 
     #[test]
@@ -935,16 +955,25 @@ mod tests {
         assert_eq!(back["appVersion"], original["appVersion"]);
         assert_eq!(back["resources"], original["resources"]);
         assert_eq!(back["styles"], original["styles"]);
-        assert_eq!(back["sheets"]["s1"]["mergeData"], original["sheets"]["s1"]["mergeData"]);
-        assert_eq!(back["sheets"]["s1"]["freeze"], original["sheets"]["s1"]["freeze"]);
-        assert_eq!(back["sheets"]["s1"]["rowData"], original["sheets"]["s1"]["rowData"]);
+        assert_eq!(
+            back["sheets"]["s1"]["mergeData"],
+            original["sheets"]["s1"]["mergeData"]
+        );
+        assert_eq!(
+            back["sheets"]["s1"]["freeze"],
+            original["sheets"]["s1"]["freeze"]
+        );
+        assert_eq!(
+            back["sheets"]["s1"]["rowData"],
+            original["sheets"]["s1"]["rowData"]
+        );
         assert_eq!(
             back["sheets"]["s1"]["cellData"]["0"]["1"],
             original["sheets"]["s1"]["cellData"]["0"]["1"],
             "cell extras (si) survive"
         );
         // And a second trip is a fixed point.
-        let again: Workbook = serde_json::from_value(back.clone()).expect("parses");
+        let again: Workbook = serde_json::from_value(back).expect("parses");
         assert_eq!(again, snapshot());
     }
 
@@ -990,7 +1019,10 @@ mod tests {
         let json: Value = serde_json::from_str(&sample().to_json()).expect("json");
         assert!(json.get("styles").is_none());
         assert_eq!(json["sheetOrder"], json!(["a", "b"]));
-        assert_eq!(json["sheets"]["a"]["cellData"]["0"]["0"], json!({ "v": "x", "t": 1 }));
+        assert_eq!(
+            json["sheets"]["a"]["cellData"]["0"]["0"],
+            json!({ "v": "x", "t": 1 })
+        );
     }
 
     // ---- Builder ---------------------------------------------------------
@@ -1039,16 +1071,23 @@ mod tests {
 
     #[test]
     fn rows_fill_from_column_a() {
-        let s = Sheet::from_rows("s", "S", [
-            vec![Cell::text("a"), Cell::text("b")],
-            vec![],
-            vec![Cell::number(3.0)],
-        ]);
-        assert_eq!(s.to_rows(), vec![
-            vec![Some("a".into()), Some("b".into())],
-            vec![None, None],
-            vec![Some(CellValue::Number(3.0)), None],
-        ]);
+        let s = Sheet::from_rows(
+            "s",
+            "S",
+            [
+                vec![Cell::text("a"), Cell::text("b")],
+                vec![],
+                vec![Cell::number(3.0)],
+            ],
+        );
+        assert_eq!(
+            s.to_rows(),
+            vec![
+                vec![Some("a".into()), Some("b".into())],
+                vec![None, None],
+                vec![Some(CellValue::Number(3.0)), None],
+            ]
+        );
         assert!(Sheet::new("e", "E").to_rows().is_empty());
     }
 
@@ -1071,13 +1110,23 @@ mod tests {
         assert_eq!(Cell::from(CellValue::from(2)), Cell::number(2.0));
         assert_eq!(Cell::from(CellValue::from(2.5)), Cell::number(2.5));
         assert_eq!(Cell::from(CellValue::from(true)), Cell::bool(true));
-        assert_eq!(Cell::from(CellValue::from(String::from("s"))), Cell::text("s"));
+        assert_eq!(
+            Cell::from(CellValue::from(String::from("s"))),
+            Cell::text("s")
+        );
         assert_eq!(Cell::text("x").with_style("b").style, Some(json!("b")));
     }
 
     #[test]
     fn cell_refs_print_in_a1_notation() {
-        for (r, c, a1) in [(0, 0, "A1"), (2, 1, "B3"), (0, 25, "Z1"), (0, 26, "AA1"), (9, 701, "ZZ10"), (0, 702, "AAA1")] {
+        for (r, c, a1) in [
+            (0, 0, "A1"),
+            (2, 1, "B3"),
+            (0, 25, "Z1"),
+            (0, 26, "AA1"),
+            (9, 701, "ZZ10"),
+            (0, 702, "AAA1"),
+        ] {
             assert_eq!(CellRef::new(r, c).to_string(), a1);
         }
     }
@@ -1123,7 +1172,10 @@ mod tests {
         });
         assert_eq!(
             err,
-            WorkbookError::SheetIdMismatch { key: SheetId::new("b"), id: SheetId::new("c") }
+            WorkbookError::SheetIdMismatch {
+                key: SheetId::new("b"),
+                id: SheetId::new("c")
+            }
         );
     }
 
@@ -1145,22 +1197,35 @@ mod tests {
         });
         assert_eq!(
             err,
-            WorkbookError::CellOutOfBounds { sheet: SheetId::new("a"), cell: CellRef::new(5, 5) }
+            WorkbookError::CellOutOfBounds {
+                sheet: SheetId::new("a"),
+                cell: CellRef::new(5, 5)
+            }
         );
         let err = invalid(|wb| {
             let s = wb.sheet_mut("a").expect("a");
             *s = s.clone().with_size(1, 0);
         });
-        assert!(matches!(err, WorkbookError::CellOutOfBounds { .. }), "{err}");
+        assert!(
+            matches!(err, WorkbookError::CellOutOfBounds { .. }),
+            "{err}"
+        );
     }
 
     #[test]
     fn rejects_non_finite_numbers() {
         for n in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            let err = invalid(|wb| wb.sheet_mut("a").expect("a").set_cell(0, 1, Cell::number(n)));
+            let err = invalid(|wb| {
+                wb.sheet_mut("a")
+                    .expect("a")
+                    .set_cell(0, 1, Cell::number(n));
+            });
             assert_eq!(
                 err,
-                WorkbookError::NonFiniteNumber { sheet: SheetId::new("a"), cell: CellRef::new(0, 1) }
+                WorkbookError::NonFiniteNumber {
+                    sheet: SheetId::new("a"),
+                    cell: CellRef::new(0, 1)
+                }
             );
         }
     }
@@ -1173,32 +1238,61 @@ mod tests {
             f(&mut l);
             wb.validate_with(&l).expect_err("over the limit")
         };
-        assert_eq!(tight(|l| l.max_sheets = 1), WorkbookError::TooManySheets { count: 2, max: 1 });
+        assert_eq!(
+            tight(|l| l.max_sheets = 1),
+            WorkbookError::TooManySheets { count: 2, max: 1 }
+        );
         assert_eq!(
             tight(|l| l.max_rows = 10),
-            WorkbookError::TooManyRows { sheet: SheetId::new("a"), count: 1000, max: 10 }
+            WorkbookError::TooManyRows {
+                sheet: SheetId::new("a"),
+                count: 1000,
+                max: 10
+            }
         );
         assert_eq!(
             tight(|l| l.max_columns = 10),
-            WorkbookError::TooManyColumns { sheet: SheetId::new("a"), count: 20, max: 10 }
+            WorkbookError::TooManyColumns {
+                sheet: SheetId::new("a"),
+                count: 20,
+                max: 10
+            }
         );
-        assert_eq!(tight(|l| l.max_cells = 0), WorkbookError::TooManyCells { max: 0 });
-        assert!(wb.validate_with(&Limits { max_cells: 1, ..Limits::default() }).is_ok());
+        assert_eq!(
+            tight(|l| l.max_cells = 0),
+            WorkbookError::TooManyCells { max: 0 }
+        );
+        assert!(
+            wb.validate_with(&Limits {
+                max_cells: 1,
+                ..Limits::default()
+            })
+            .is_ok()
+        );
     }
 
     #[test]
     fn builder_applies_custom_limits() {
         let err = Workbook::builder("w", "W")
             .sheet(Sheet::new("a", "A"))
-            .build_with(&Limits { max_sheets: 0, ..Limits::default() })
+            .build_with(&Limits {
+                max_sheets: 0,
+                ..Limits::default()
+            })
             .expect_err("over");
         assert_eq!(err, WorkbookError::TooManySheets { count: 1, max: 0 });
     }
 
     #[test]
     fn errors_explain_themselves() {
-        let e = WorkbookError::CellOutOfBounds { sheet: SheetId::new("s"), cell: CellRef::new(0, 2) };
-        assert_eq!(e.to_string(), "cell C1 of sheet `s` is outside the sheet size");
+        let e = WorkbookError::CellOutOfBounds {
+            sheet: SheetId::new("s"),
+            cell: CellRef::new(0, 2),
+        };
+        assert_eq!(
+            e.to_string(),
+            "cell C1 of sheet `s` is outside the sheet size"
+        );
     }
 
     // ---- Properties ------------------------------------------------------
@@ -1216,7 +1310,9 @@ mod tests {
         prop::collection::vec((0_u32..50, 0_u32..30, arb_cell()), 0..20).prop_map(move |cells| {
             cells
                 .into_iter()
-                .fold(Sheet::new(id.clone(), id.clone()), |s, (r, c, cell)| s.with_cell(r, c, cell))
+                .fold(Sheet::new(id.clone(), id.clone()), |s, (r, c, cell)| {
+                    s.with_cell(r, c, cell)
+                })
         })
     }
 

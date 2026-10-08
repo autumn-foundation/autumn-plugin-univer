@@ -36,8 +36,18 @@ fn emits_the_documented_events() {
 #[test]
 fn reads_every_spreadsheet_attribute() {
     for attr in [
-        "locale", "height", "readonly", "dark", "header", "toolbar", "footer",
-        "formula-bar", "context-menu", "load-url", "save-url", "autosave",
+        "locale",
+        "height",
+        "readonly",
+        "dark",
+        "header",
+        "toolbar",
+        "footer",
+        "formula-bar",
+        "context-menu",
+        "load-url",
+        "save-url",
+        "autosave",
     ] {
         assert!(INIT.contains(&format!(r#""{attr}""#)), "{attr}");
     }
@@ -47,7 +57,13 @@ fn reads_every_spreadsheet_attribute() {
 
 #[test]
 fn uses_no_unsafe_dom_or_eval() {
-    for banned in ["eval(", "new Function", "innerHTML", "document.write", "outerHTML"] {
+    for banned in [
+        "eval(",
+        "new Function",
+        "innerHTML",
+        "document.write",
+        "outerHTML",
+    ] {
         assert!(!INIT.contains(banned), "{banned}");
     }
 }
@@ -55,7 +71,10 @@ fn uses_no_unsafe_dom_or_eval() {
 #[test]
 fn read_only_sheets_block_edits() {
     assert!(INIT.contains("setEditable(false)"));
-    assert!(INIT.contains("getWorkbookPermission().setReadOnly()"), "blocks typing too");
+    assert!(
+        INIT.contains("getWorkbookPermission().setReadOnly()"),
+        "blocks typing too"
+    );
 }
 
 #[test]

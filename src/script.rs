@@ -9,13 +9,16 @@ use crate::assets::{INIT_JS, PLUGIN_CSS, UNIVER_ASSETS, UNIVER_CSS, UNIVER_JS};
 
 /// Renders one `<script type="module">` tag for a bundled file.
 fn module_tag(path: &str) -> Markup {
-    match UNIVER_ASSETS.get(path) {
-        Some(asset) => html! {
-            script type="module" src=(asset.url()) integrity=(asset.integrity()) crossorigin="anonymous" {}
+    // The `None` arm is unreachable: the paths are bundle constants. A test
+    // checks the fallback.
+    UNIVER_ASSETS.get(path).map_or_else(
+        || UNIVER_ASSETS.script_tag(path),
+        |asset| {
+            html! {
+                script type="module" src=(asset.url()) integrity=(asset.integrity()) crossorigin="anonymous" {}
+            }
         },
-        // Unreachable: the paths are constants of the bundle. A test checks it.
-        None => UNIVER_ASSETS.script_tag(path),
-    }
+    )
 }
 
 /// Renders the `<script>` tags that load Univer and the mount script.
@@ -69,10 +72,17 @@ mod tests {
         for path in [UNIVER_JS, INIT_JS] {
             let a = asset(path);
             assert!(html.contains(&format!(r#"src="{}""#, a.url())), "{html}");
-            assert!(html.contains(&format!(r#"integrity="{}""#, a.integrity())), "{html}");
+            assert!(
+                html.contains(&format!(r#"integrity="{}""#, a.integrity())),
+                "{html}"
+            );
         }
         assert_eq!(html.matches(r#"type="module""#).count(), 2, "{html}");
-        assert_eq!(html.matches(r#"crossorigin="anonymous""#).count(), 2, "{html}");
+        assert_eq!(
+            html.matches(r#"crossorigin="anonymous""#).count(),
+            2,
+            "{html}"
+        );
         assert!(!html.contains("not found"), "{html}");
     }
 
@@ -90,7 +100,10 @@ mod tests {
         for path in [UNIVER_CSS, PLUGIN_CSS] {
             let a = asset(path);
             assert!(html.contains(&format!(r#"href="{}""#, a.url())), "{html}");
-            assert!(html.contains(&format!(r#"integrity="{}""#, a.integrity())), "{html}");
+            assert!(
+                html.contains(&format!(r#"integrity="{}""#, a.integrity())),
+                "{html}"
+            );
         }
         assert_eq!(html.matches(r#"rel="stylesheet""#).count(), 2, "{html}");
     }

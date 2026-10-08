@@ -3,13 +3,16 @@
 //! Run: `cargo test --features system-tests --test system`.
 //! They need Chromium (see `autumn_web::system_test` for the lookup).
 
+// Test helpers outside `#[test]` functions may panic on setup errors.
+#![allow(clippy::expect_used, clippy::panic)]
+
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use autumn_plugin_univer::{
-    Cell, Sheet, Spreadsheet, UniverPlugin, Workbook, WorkbookSnapshot, save_button,
-    univer_script, univer_stylesheet,
+    Cell, Sheet, Spreadsheet, UniverPlugin, Workbook, WorkbookSnapshot, save_button, univer_script,
+    univer_stylesheet,
 };
 use autumn_web::config::AutumnConfig;
 use autumn_web::extract::Path;
@@ -37,7 +40,7 @@ fn seed(id: &str) -> Workbook {
         .expect("valid seed")
 }
 
-fn layout(csrf: Option<&CsrfToken>, body: Markup) -> Markup {
+fn layout(csrf: Option<&CsrfToken>, body: &Markup) -> Markup {
     html! {
         (maud::DOCTYPE)
         html {
@@ -62,7 +65,7 @@ async fn sheet_page(Path(key): Path<String>, csrf: Option<CsrfToken>) -> Markup 
         .workbook(&seed(&key))
         .save_url(format!("/save/{key}"))
         .autosave(Duration::from_millis(200));
-    layout(csrf.as_ref(), html! { (sheet) })
+    layout(csrf.as_ref(), &html! { (sheet) })
 }
 
 #[get("/no-csrf/{key}")]
@@ -71,7 +74,7 @@ async fn no_csrf_page(Path(key): Path<String>) -> Markup {
         .workbook(&seed(&key))
         .save_url(format!("/save/{key}"))
         .autosave(Duration::from_millis(200));
-    layout(None, html! { (sheet) })
+    layout(None, &html! { (sheet) })
 }
 
 #[get("/readonly")]
@@ -81,7 +84,7 @@ async fn readonly_page(csrf: Option<CsrfToken>) -> Markup {
         .save_url("/save/ro")
         .autosave(Duration::from_millis(100))
         .read_only(true);
-    layout(csrf.as_ref(), html! { (sheet) })
+    layout(csrf.as_ref(), &html! { (sheet) })
 }
 
 #[get("/manual/{key}")]
@@ -90,13 +93,18 @@ async fn manual_page(Path(key): Path<String>, csrf: Option<CsrfToken>) -> Markup
         .workbook(&seed(&key))
         .save_url(format!("/save/{key}"))
         .manual_save();
-    layout(csrf.as_ref(), html! { (sheet) (save_button("sheet", "Save")) })
+    layout(
+        csrf.as_ref(),
+        &html! { (sheet) (save_button("sheet", "Save")) },
+    )
 }
 
 #[get("/loaded")]
 async fn loaded_page(csrf: Option<CsrfToken>) -> Markup {
-    let sheet = Spreadsheet::new("sheet").load_url("/data.json").height("300px");
-    layout(csrf.as_ref(), html! { (sheet) })
+    let sheet = Spreadsheet::new("sheet")
+        .load_url("/data.json")
+        .height("300px");
+    layout(csrf.as_ref(), &html! { (sheet) })
 }
 
 #[get("/data.json")]
@@ -108,7 +116,7 @@ async fn data_json() -> Json<Workbook> {
 async fn two_page(csrf: Option<CsrfToken>) -> Markup {
     layout(
         csrf.as_ref(),
-        html! {
+        &html! {
             (Spreadsheet::new("one").workbook(&seed("one")))
             (Spreadsheet::new("two").workbook(&seed("two")).footer(false).toolbar(false))
         },
@@ -120,7 +128,7 @@ async fn locale_page(csrf: Option<CsrfToken>) -> Markup {
     // A locale code this build may not hold: init.js falls back to en-US.
     layout(
         csrf.as_ref(),
-        html! {
+        &html! {
             div id="sheet" class="autumn-univer" data-univer data-univer-locale="xx-XX" {
                 div data-univer-mount {}
             }
@@ -134,14 +142,14 @@ async fn french_page(csrf: Option<CsrfToken>) -> Markup {
     let sheet = Spreadsheet::new("sheet")
         .workbook(&seed("fr"))
         .locale(autumn_plugin_univer::Locale::FrFr);
-    layout(csrf.as_ref(), html! { (sheet) })
+    layout(csrf.as_ref(), &html! { (sheet) })
 }
 
 #[get("/htmx")]
 async fn htmx_page(csrf: Option<CsrfToken>) -> Markup {
     layout(
         csrf.as_ref(),
-        html! {
+        &html! {
             button id="load" hx-get="/fragment" hx-target="#slot" { "Load" }
             button id="clear" hx-get="/empty" hx-target="#slot" { "Clear" }
             div id="slot" {}
@@ -167,8 +175,10 @@ async fn save(Path(key): Path<String>, WorkbookSnapshot(wb): WorkbookSnapshot) -
 
 /// Serves the app on an ephemeral port and attaches Chromium.
 async fn start() -> SystemTestRunner {
-    let mut config = AutumnConfig::default();
-    config.profile = Some("test".into());
+    let mut config = AutumnConfig {
+        profile: Some("test".into()),
+        ..AutumnConfig::default()
+    };
     config.security.csrf.enabled = true;
     #[allow(unused_mut)]
     let mut app = TestApp::new()
@@ -222,10 +232,10 @@ async fn eval<T: serde::de::DeserializeOwned>(page: &Page, js: &str) -> T {
 async fn wait_for(page: &Page, js: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
-        if let Ok(result) = page.evaluate(js).await {
-            if result.into_value::<bool>().unwrap_or(false) {
-                return;
-            }
+        if let Ok(result) = page.evaluate(js).await
+            && result.into_value::<bool>().unwrap_or(false)
+        {
+            return;
         }
         if tokio::time::Instant::now() > deadline {
             let errors = page.console_errors();
@@ -238,7 +248,9 @@ async fn wait_for(page: &Page, js: &str) {
 async fn wait_state(page: &Page, id: &str, state: &str) {
     wait_for(
         page,
-        &format!("document.getElementById('{id}')?.getAttribute('data-univer-state') === '{state}'"),
+        &format!(
+            "document.getElementById('{id}')?.getAttribute('data-univer-state') === '{state}'"
+        ),
     )
     .await;
 }
@@ -277,17 +289,27 @@ async fn mounts_under_the_default_csp_with_no_console_errors() {
     wait_for(&page, &format!("{} === 84", value_js("sheet", "B1"))).await;
     let canvases: u32 = eval(&page, "document.querySelectorAll('#sheet canvas').length").await;
     assert!(canvases > 0, "Univer draws on a canvas");
-    page.expect_no_console_errors().await.expect("clean console");
+    page.expect_no_console_errors()
+        .await
+        .expect("clean console");
     // No save without an edit.
     tokio::time::sleep(Duration::from_millis(600)).await;
-    assert!(saved().lock().expect("lock").get("mount").is_none(), "no spurious save");
+    assert!(
+        saved().lock().expect("lock").get("mount").is_none(),
+        "no spurious save"
+    );
 }
 
 #[tokio::test]
 async fn the_page_carries_the_default_csp() {
-    let client = TestApp::new().plugin(UniverPlugin::new()).routes(routes![sheet_page]).build();
+    let client = TestApp::new()
+        .plugin(UniverPlugin::new())
+        .routes(routes![sheet_page])
+        .build();
     let response = client.get("/sheet/csp").send().await;
-    let csp = response.header("content-security-policy").expect("CSP header");
+    let csp = response
+        .header("content-security-policy")
+        .expect("CSP header");
     assert!(csp.contains("script-src 'self'"), "{csp}");
     assert!(!csp.contains("unsafe-eval"), "{csp}");
 }
@@ -302,8 +324,14 @@ async fn an_edit_autosaves_with_the_csrf_token() {
     assert!(set, "setValue works");
     wait_state(&page, "sheet", "saved").await;
     assert_eq!(saved_cell("edit", 1, 0), Some("hello".into()));
-    assert_eq!(saved_cell("edit", 0, 0), Some(42.0.into()), "old data stays");
-    page.expect_no_console_errors().await.expect("clean console");
+    assert_eq!(
+        saved_cell("edit", 0, 0),
+        Some(42.0.into()),
+        "old data stays"
+    );
+    page.expect_no_console_errors()
+        .await
+        .expect("clean console");
 }
 
 #[tokio::test]
@@ -334,7 +362,11 @@ async fn read_only_sheets_block_edits_and_never_save() {
     tokio::time::sleep(Duration::from_millis(500)).await;
     let a1: f64 = eval(&page, &value_js("sheet", "A1")).await;
     assert!((a1 - 42.0).abs() < f64::EPSILON, "A1 unchanged: {a1}");
-    let state: String = eval(&page, "document.getElementById('sheet').getAttribute('data-univer-state')").await;
+    let state: String = eval(
+        &page,
+        "document.getElementById('sheet').getAttribute('data-univer-state')",
+    )
+    .await;
     assert_eq!(state, "ready");
     assert!(saved().lock().expect("lock").get("ro").is_none());
 }
@@ -348,7 +380,10 @@ async fn the_save_button_saves_a_manual_sheet() {
     let _: bool = eval(&page, &set_js("sheet", "C3", "typed")).await;
     wait_state(&page, "sheet", "dirty").await;
     tokio::time::sleep(Duration::from_millis(400)).await;
-    assert!(saved().lock().expect("lock").get("manual").is_none(), "no autosave");
+    assert!(
+        saved().lock().expect("lock").get("manual").is_none(),
+        "no autosave"
+    );
     page.click("Save").await.expect("click");
     wait_state(&page, "sheet", "saved").await;
     assert_eq!(saved_cell("manual", 2, 2), Some("typed".into()));
@@ -379,7 +414,9 @@ async fn two_sheets_mount_on_one_page() {
     )
     .await;
     assert_eq!(ids, ["one", "two"]);
-    page.expect_no_console_errors().await.expect("clean console");
+    page.expect_no_console_errors()
+        .await
+        .expect("clean console");
 }
 
 #[tokio::test]
@@ -402,7 +439,9 @@ async fn only_the_active_sheet_keeps_the_editor_ids() {
         let got: String = eval(&page, owner).await;
         assert_eq!(got, id, "editor id belongs to the active sheet");
     }
-    page.expect_no_console_errors().await.expect("clean console");
+    page.expect_no_console_errors()
+        .await
+        .expect("clean console");
 }
 
 #[tokio::test]
@@ -411,7 +450,9 @@ async fn unknown_locales_fall_back_to_en_us() {
     let page = runner.page().await.expect("page");
     page.visit("/locale").await.expect("visit");
     wait_state(&page, "sheet", "ready").await;
-    page.expect_no_console_errors().await.expect("a warning, not an error");
+    page.expect_no_console_errors()
+        .await
+        .expect("a warning, not an error");
 }
 
 #[cfg(feature = "locale-fr-fr")]
@@ -433,7 +474,9 @@ async fn a_bundled_locale_loads_lazily() {
     )
     .await;
     assert!(loaded, "the fr-FR chunk loads on demand");
-    page.expect_no_console_errors().await.expect("clean console");
+    page.expect_no_console_errors()
+        .await
+        .expect("clean console");
 }
 
 #[tokio::test]
@@ -443,7 +486,11 @@ async fn htmx_swaps_mount_and_cleanup_disposes() {
     page.visit("/htmx").await.expect("visit");
     page.click("#load").await.expect("click load");
     wait_state(&page, "sheet", "ready").await;
-    eval::<bool>(&page, "(window.__el = document.getElementById('sheet'), true)").await;
+    eval::<bool>(
+        &page,
+        "(window.__el = document.getElementById('sheet'), true)",
+    )
+    .await;
     page.click("#clear").await.expect("click clear");
     wait_for(&page, "document.getElementById('gone') !== null").await;
     wait_for(&page, "AutumnUniver.get(window.__el) === undefined").await;
@@ -452,5 +499,7 @@ async fn htmx_swaps_mount_and_cleanup_disposes() {
     // Load again: a fresh instance mounts.
     page.click("#load").await.expect("click load again");
     wait_state(&page, "sheet", "ready").await;
-    page.expect_no_console_errors().await.expect("clean console");
+    page.expect_no_console_errors()
+        .await
+        .expect("clean console");
 }
