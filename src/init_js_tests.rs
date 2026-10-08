@@ -63,3 +63,15 @@ fn counts_only_mutations_of_its_own_workbook() {
     assert!(INIT.contains("event.type !== MUTATION"));
     assert!(INIT.contains("event.params.unitId !== unitId"));
 }
+
+#[test]
+fn scopes_univer_editor_ids_to_the_active_sheet() {
+    assert!(INIT.contains("--autumn-inactive"));
+    assert!(INIT.contains(r#"addEventListener("pointerdown", onEnter, true)"#));
+    assert!(INIT.contains(r#"addEventListener("focusin", onEnter, true)"#));
+}
+
+#[test]
+fn ready_waits_for_the_rendered_stage() {
+    assert!(INIT.contains("whenStage(univerAPI, RENDERED)"));
+}

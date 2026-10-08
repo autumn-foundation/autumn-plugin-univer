@@ -26,6 +26,7 @@ pub(crate) const INIT_JS: &str = "init.js";
 pub(crate) const PLUGIN_CSS: &str = "autumn-univer.css";
 
 /// License notices of the vendored packages.
+#[cfg(test)]
 pub(crate) const LICENSES: &str = "THIRD-PARTY-LICENSES.txt";
 
 /// The plugin asset bundle.

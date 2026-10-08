@@ -58,6 +58,13 @@ function whenStage(univerAPI, stage) {
   });
 }
 
+function nextFrames(count) {
+  return new Promise((resolve) => {
+    const step = (left) => (left <= 0 ? resolve() : requestAnimationFrame(() => step(left - 1)));
+    step(count);
+  });
+}
+
 async function loadLocale(code) {
   const loader = LIB.locales[code];
   if (!loader) {
@@ -119,8 +126,10 @@ async function mount(el) {
     });
     const workbook = univerAPI.createWorkbook(data);
     const readOnly = has(el, "readonly");
-    // Univer resets permissions until the Rendered stage.
+    // Univer resets permissions until the Rendered stage, and binds pointer
+    // input on the frames after it.
     await whenStage(univerAPI, RENDERED);
+    await nextFrames(2);
     if (readOnly) {
       // setEditable alone does not block typing in Univer 1.0; the
       // permission mode blocks both the UI and the facade API.
@@ -150,6 +159,7 @@ async function mount(el) {
       if (event.options && (event.options.onlyLocal || event.options.fromCollab)) return;
       onChange(el, state);
     });
+    if (states.size > 1) activate(active && states.has(active) ? active : el, true);
     setState(el, "ready");
     emit(el, "ready", { univerAPI, workbook });
   } catch (error) {
@@ -221,6 +231,7 @@ function dispose(el) {
     save(el, { keepalive: true });
   }
   states.delete(el);
+  if (active === el) active = null;
   clearTimeout(state.timer);
   try {
     if (state.subscription) state.subscription.dispose();
@@ -230,6 +241,31 @@ function dispose(el) {
   }
   el.removeAttribute("data-univer-init");
   el.removeAttribute("data-univer-state");
+}
+
+// Univer 1.0 gives editor nodes fixed ids (`__editor_…`) and finds them
+// with getElementById. With two sheets on one page, keys then go to the
+// wrong sheet. So only the active sheet keeps its ids; the other sheets
+// get a suffix until the user moves to them.
+const INACTIVE = "--autumn-inactive";
+let active = null;
+
+function activate(el, force = false) {
+  if (active === el && !force) return;
+  active = el;
+  for (const other of states.keys()) {
+    const on = other === el;
+    for (const node of other.querySelectorAll("[id]")) {
+      const id = node.id;
+      if (on && id.endsWith(INACTIVE)) node.id = id.slice(0, -INACTIVE.length);
+      else if (!on && !id.endsWith(INACTIVE)) node.id = id + INACTIVE;
+    }
+  }
+}
+
+function onEnter(event) {
+  const el = event.target instanceof Element && event.target.closest(SELECTOR);
+  if (el && states.has(el)) activate(el);
 }
 
 function scan(root) {
@@ -242,6 +278,8 @@ function reap() {
   for (const el of [...states.keys()]) if (!el.isConnected) dispose(el);
 }
 
+document.addEventListener("pointerdown", onEnter, true);
+document.addEventListener("focusin", onEnter, true);
 document.addEventListener("htmx:load", (event) => scan(event.target));
 document.addEventListener("htmx:beforeCleanupElement", (event) => {
   if (states.has(event.target)) dispose(event.target);

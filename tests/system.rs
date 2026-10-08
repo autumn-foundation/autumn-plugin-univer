@@ -383,6 +383,29 @@ async fn two_sheets_mount_on_one_page() {
 }
 
 #[tokio::test]
+async fn only_the_active_sheet_keeps_the_editor_ids() {
+    // Univer finds its cell editor by a fixed DOM id. With two sheets, the
+    // id must point into the sheet that the user works in.
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/two").await.expect("visit");
+    wait_state(&page, "one", "ready").await;
+    wait_state(&page, "two", "ready").await;
+    let owner = "(() => { const n = document.querySelectorAll('[id=\"__editor___INTERNAL_EDITOR__DOCS_NORMAL\"]'); return n.length === 1 ? n[0].closest('[data-univer]').id : 'count=' + n.length; })()";
+    let press = |id: &str| {
+        format!(
+            "(document.querySelector('#{id} canvas').dispatchEvent(new PointerEvent('pointerdown', {{ bubbles: true }})), true)"
+        )
+    };
+    for id in ["two", "one", "two"] {
+        let _: bool = eval(&page, &press(id)).await;
+        let got: String = eval(&page, owner).await;
+        assert_eq!(got, id, "editor id belongs to the active sheet");
+    }
+    page.expect_no_console_errors().await.expect("clean console");
+}
+
+#[tokio::test]
 async fn unknown_locales_fall_back_to_en_us() {
     let runner = start().await;
     let page = runner.page().await.expect("page");
