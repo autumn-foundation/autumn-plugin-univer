@@ -50,7 +50,7 @@ counter-measure.
 | Inline `style=` attributes. Nonce-mode CSP blocks them. | Height goes in `data-univer-height`. `init.js` sets it through CSSOM. |
 | Put `</script>` in a cell value. The page breaks (XSS). | Escape `<`, `>`, `&`, U+2028 and U+2029 in the JSON block. Test it. |
 | Drop unknown snapshot fields on save. Styles and merges get lost. | The model keeps unknown fields (`#[serde(flatten)]`). A round-trip test uses a real Univer snapshot. |
-| Accept any JSON on save. A client sends 10⁹ cells. | `WorkbookSnapshot` validates structure and limits. It returns 422. |
+| Accept any JSON on save. A client sends 10⁹ cells. | `WorkbookSnapshot` reads at most 8 MiB (413), then validates structure and limits (422). |
 | Forget CSRF on save. Autumn rejects the POST. | `init.js` sends the token from `<meta name="csrf-token">`, as the Autumn htmx helper does. |
 | Mount twice after an htmx swap. | `init.js` marks mounted nodes with `data-univer-init`. |
 | Leak Univer instances on swap. | Dispose on `htmx:beforeCleanupElement`. |
@@ -123,6 +123,9 @@ valid(w) ⇔
   ∀ i ≠ j. w.sheet_order[i] ≠ w.sheet_order[j] ∧
   ∀ id ∈ w.sheet_order. id ∈ keys(w.sheets) ∧ w.sheets[id].id = id ∧
   ∀ s ∈ w.sheets, (r, c) ∈ keys(s.cells). r < s.row_count ∧ c < s.column_count ∧
+  ∀ s ∈ w.sheets, n ∈ numbers(s.cells). finite(n) ∧
+  keys(w.extra) ∩ WORKBOOK_FIELDS = ∅ ∧ ∀ s. keys(s.extra) ∩ SHEET_FIELDS = ∅ ∧
+  ∀ s, c ∈ s.cells. keys(c.extra) ∩ CELL_FIELDS = ∅ ∧
   |w.sheets| ≤ limits.max_sheets ∧ Σ |s.cells| ≤ limits.max_cells ∧
   ∀ s. s.row_count ≤ limits.max_rows ∧ s.column_count ≤ limits.max_columns
 

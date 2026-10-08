@@ -2,12 +2,13 @@
 //!
 //! Use it to seed a [`Spreadsheet`](crate::Spreadsheet) and to read a saved
 //! snapshot. The model types the fields that apps use: ids, names, sheet
-//! order, sizes and cells. It keeps every other field in `extra`, so a
-//! snapshot round-trips with no loss (styles, merges, row heights, …).
+//! order, sizes, styles and cells. It keeps every other field in `extra`
+//! (merges, row heights, resources, …), so a snapshot round-trips with no
+//! data loss. (`null` fields go away; they hold no data.)
 //!
 //! # Invariants
 //!
-//! [`Workbook::validate`] holds iff all of these are true:
+//! [`Workbook::validate`] returns `Ok` only if all of these are true:
 //!
 //! 1. The workbook id is not empty.
 //! 2. `sheet_order` has no duplicates.
@@ -16,6 +17,8 @@
 //! 5. Each cell is in bounds: `row < row_count`, `col < column_count`.
 //! 6. Each number cell is finite.
 //! 7. Sizes are in [`Limits`]: sheets, rows, columns and total cells.
+//! 8. No `extra` map holds the name of a typed field (for example `id`).
+//!    Such a key would write the field twice in the JSON.
 //!
 //! [`WorkbookBuilder::build`] returns only valid workbooks.
 
@@ -30,6 +33,21 @@ const DEFAULT_ROWS: u32 = 1000;
 
 /// Univer's default column count for a new sheet.
 const DEFAULT_COLUMNS: u32 = 20;
+
+/// The default entry cap of [`Sheet::to_rows`].
+const MAX_GRID: usize = 1_000_000;
+
+/// Typed field names of each level. An `extra` map must not hold them.
+const WORKBOOK_FIELDS: [&str; 5] = ["id", "name", "sheetOrder", "sheets", "styles"];
+const SHEET_FIELDS: [&str; 5] = ["id", "name", "rowCount", "columnCount", "cellData"];
+const CELL_FIELDS: [&str; 4] = ["v", "t", "f", "s"];
+
+/// The first typed field name in `extra`, if any.
+fn reserved<'a>(extra: &'a Map<String, Value>, fields: &[&str]) -> Option<&'a str> {
+    fields
+        .iter()
+        .find_map(|f| extra.get_key_value(*f).map(|(k, _)| k.as_str()))
+}
 
 macro_rules! string_id {
     ($(#[$doc:meta])* $name:ident) => {
@@ -66,6 +84,12 @@ macro_rules! string_id {
         impl From<String> for $name {
             fn from(id: String) -> Self {
                 Self(id)
+            }
+        }
+
+        impl std::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                &self.0
             }
         }
     };
@@ -113,8 +137,9 @@ impl fmt::Display for CellRef {
 }
 
 /// A cell value (Univer `v`).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(untagged)]
+///
+/// JSON has three scalar kinds, so this enum has three variants.
+#[derive(Debug, Clone, PartialEq)]
 pub enum CellValue {
     /// A boolean.
     Bool(bool),
@@ -139,6 +164,26 @@ impl Serialize for CellValue {
                 s.serialize_i64(*n as i64)
             }
             Self::Number(n) => s.serialize_f64(*n),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for CellValue {
+    /// Reads a JSON boolean, number or string. It reads the number through
+    /// `serde_json::Value`, so it works with every `serde_json` feature set
+    /// (`arbitrary_precision` breaks an untagged `f64`).
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        match Value::deserialize(d)? {
+            Value::Bool(b) => Ok(Self::Bool(b)),
+            Value::String(t) => Ok(Self::Text(t)),
+            Value::Number(n) => n
+                .as_f64()
+                .map(Self::Number)
+                .ok_or_else(|| D::Error::custom(format!("number {n} is not an f64"))),
+            other => Err(D::Error::custom(format!(
+                "a cell value is a boolean, number or string, not {other}"
+            ))),
         }
     }
 }
@@ -174,7 +219,11 @@ impl From<bool> for CellValue {
 }
 
 /// The cell type hint (Univer `t`, `CellValueType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Make one from a code with [`CellType::from_code`]. It maps codes 1 to 4
+/// to the named variants, so equal codes give equal values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CellType {
     /// `1`: text.
     Text,
@@ -184,12 +233,15 @@ pub enum CellType {
     Bool,
     /// `4`: text that looks like a number, kept as text.
     ForceText,
-    /// Any other code. Kept for round-trips.
+    /// Any other code (0, or 5 to 255). The model keeps it for round
+    /// trips. A code outside 0 to 255 is a read error.
     Other(u8),
 }
 
 impl CellType {
-    const fn code(self) -> u8 {
+    /// The Univer code.
+    #[must_use]
+    pub const fn code(self) -> u8 {
         match self {
             Self::Text => 1,
             Self::Number => 2,
@@ -199,7 +251,9 @@ impl CellType {
         }
     }
 
-    const fn from_code(code: u8) -> Self {
+    /// The type for a Univer code.
+    #[must_use]
+    pub const fn from_code(code: u8) -> Self {
         match code {
             1 => Self::Text,
             2 => Self::Number,
@@ -330,19 +384,22 @@ mod cell_matrix {
         as_text.serialize(s)
     }
 
+    /// Parses a canonical decimal index. `"01"` and `"+1"` are errors, so
+    /// two keys can never name one cell.
+    fn index(key: &str) -> Option<u32> {
+        key.parse::<u32>().ok().filter(|i| i.to_string() == key)
+    }
+
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<CellMatrix, D::Error> {
         let raw =
             Option::<BTreeMap<String, Option<BTreeMap<String, Option<Cell>>>>>::deserialize(d)?;
         let mut out = CellMatrix::new();
         for (r, row) in raw.unwrap_or_default() {
-            let r: u32 = r
-                .parse()
-                .map_err(|_| D::Error::custom(format!("bad row index `{r}`")))?;
+            let r = index(&r).ok_or_else(|| D::Error::custom(format!("bad row index `{r}`")))?;
             let cells = out.entry(r).or_default();
             for (c, cell) in row.unwrap_or_default() {
-                let c: u32 = c
-                    .parse()
-                    .map_err(|_| D::Error::custom(format!("bad column index `{c}`")))?;
+                let c =
+                    index(&c).ok_or_else(|| D::Error::custom(format!("bad column index `{c}`")))?;
                 if let Some(cell) = cell {
                     cells.insert(c, cell);
                 }
@@ -421,7 +478,8 @@ impl Sheet {
             })
     }
 
-    /// Sets one cell. The sheet grows to hold it.
+    /// Sets one cell. The sheet grows to hold it. (Row or column
+    /// `u32::MAX` cannot fit: the count stops at `u32::MAX`.)
     #[must_use]
     pub fn with_cell(mut self, row: u32, col: u32, cell: impl Into<Cell>) -> Self {
         self.set_cell(row, col, cell);
@@ -445,7 +503,8 @@ impl Sheet {
         self
     }
 
-    /// Sets one cell. The sheet grows to hold it.
+    /// Sets one cell. The sheet grows to hold it. (Row or column
+    /// `u32::MAX` cannot fit: the count stops at `u32::MAX`.)
     pub fn set_cell(&mut self, row: u32, col: u32, cell: impl Into<Cell>) {
         self.row_count = self.row_count.max(row.saturating_add(1));
         self.column_count = self.column_count.max(col.saturating_add(1));
@@ -489,46 +548,72 @@ impl Sheet {
 
     /// The values as dense rows, from `A1` to the last set cell.
     ///
+    /// The grid can be much larger than the set cells (one cell at `Z9999`
+    /// gives 259 974 entries), so it has a cap of 1 000 000 entries. Use
+    /// [`Sheet::to_rows_with`] for another cap, or [`Sheet::cells`] for
+    /// sparse data.
+    ///
     /// ```rust
     /// use autumn_plugin_univer::{Cell, CellValue, Sheet};
     ///
     /// let sheet = Sheet::new("s1", "S").with_cell(1, 1, Cell::number(5.0));
-    /// assert_eq!(sheet.to_rows(), vec![
+    /// assert_eq!(sheet.to_rows(), Ok(vec![
     ///     vec![None, None],
     ///     vec![None, Some(CellValue::Number(5.0))],
-    /// ]);
+    /// ]));
     /// ```
-    #[must_use]
-    pub fn to_rows(&self) -> Vec<Vec<Option<CellValue>>> {
+    ///
+    /// # Errors
+    ///
+    /// [`WorkbookError::GridTooLarge`] when the grid is over the cap.
+    pub fn to_rows(&self) -> Result<Vec<Vec<Option<CellValue>>>, WorkbookError> {
+        self.to_rows_with(MAX_GRID)
+    }
+
+    /// The values as dense rows, with a cap of `max_entries` grid entries.
+    ///
+    /// # Errors
+    ///
+    /// [`WorkbookError::GridTooLarge`] when the grid is over the cap.
+    pub fn to_rows_with(
+        &self,
+        max_entries: usize,
+    ) -> Result<Vec<Vec<Option<CellValue>>>, WorkbookError> {
         let Some(&last_row) = self.cells.keys().next_back() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let width = self
             .cells
             .values()
             .filter_map(|row| row.keys().next_back())
             .max()
-            .map_or(0, |&c| c as usize + 1);
-        (0..=last_row)
-            .map(|r| {
-                (0..width)
-                    .map(|c| {
-                        u32::try_from(c)
-                            .ok()
-                            .and_then(|c| self.value(r, c))
-                            .cloned()
-                    })
-                    .collect()
-            })
-            .collect()
+            .map_or(0, |&c| u64::from(c) + 1);
+        let entries = (u64::from(last_row) + 1).saturating_mul(width);
+        if usize::try_from(entries).map_or(true, |e| e > max_entries) {
+            return Err(WorkbookError::GridTooLarge {
+                sheet: self.id.clone(),
+                entries,
+                max: max_entries,
+            });
+        }
+        let width = u32::try_from(width).unwrap_or(u32::MAX);
+        Ok((0..=last_row)
+            .map(|r| (0..width).map(|c| self.value(r, c).cloned()).collect())
+            .collect())
     }
 }
 
 impl Sheet {
-    /// Checks invariants 4 to 7 for the sheet stored under `key`.
+    /// Checks invariants 4 to 8 for the sheet stored under `key`.
     fn validate(&self, key: &SheetId, limits: &Limits) -> Result<(), WorkbookError> {
         if key.as_str().is_empty() || self.id.as_str().is_empty() {
             return Err(WorkbookError::EmptySheetId);
+        }
+        if let Some(field) = reserved(&self.extra, &SHEET_FIELDS) {
+            return Err(WorkbookError::ReservedKey {
+                place: format!("sheet `{key}`"),
+                key: field.to_owned(),
+            });
         }
         if &self.id != key {
             return Err(WorkbookError::SheetIdMismatch {
@@ -563,6 +648,12 @@ impl Sheet {
                     cell: at,
                 });
             }
+            if let Some(field) = reserved(&cell.extra, &CELL_FIELDS) {
+                return Err(WorkbookError::ReservedKey {
+                    place: format!("cell {at} of sheet `{key}`"),
+                    key: field.to_owned(),
+                });
+            }
         }
         Ok(())
     }
@@ -573,6 +664,7 @@ impl Sheet {
 /// The defaults match the Excel grid (1 048 576 × 16 384) and cap the work
 /// that one request can cause: 200 sheets and 1 000 000 set cells.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Limits {
     /// The maximum number of sheets.
     pub max_sheets: usize,
@@ -582,6 +674,36 @@ pub struct Limits {
     pub max_columns: u32,
     /// The maximum number of set cells in all sheets.
     pub max_cells: usize,
+}
+
+impl Limits {
+    /// Sets the maximum number of sheets.
+    #[must_use]
+    pub const fn with_max_sheets(mut self, max: usize) -> Self {
+        self.max_sheets = max;
+        self
+    }
+
+    /// Sets the maximum `row_count` of a sheet.
+    #[must_use]
+    pub const fn with_max_rows(mut self, max: u32) -> Self {
+        self.max_rows = max;
+        self
+    }
+
+    /// Sets the maximum `column_count` of a sheet.
+    #[must_use]
+    pub const fn with_max_columns(mut self, max: u32) -> Self {
+        self.max_columns = max;
+        self
+    }
+
+    /// Sets the maximum number of set cells in all sheets.
+    #[must_use]
+    pub const fn with_max_cells(mut self, max: usize) -> Self {
+        self.max_cells = max;
+        self
+    }
 }
 
 impl Default for Limits {
@@ -596,7 +718,7 @@ impl Default for Limits {
 }
 
 /// Why a workbook is not valid. See the module docs for the invariants.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum WorkbookError {
     /// Invariant 1.
@@ -672,6 +794,24 @@ pub enum WorkbookError {
         /// The limit.
         max: usize,
     },
+    /// Invariant 8.
+    #[error("`extra` of {place} holds `{key}`, which is a typed field")]
+    ReservedKey {
+        /// Where: the workbook, a sheet or a cell.
+        place: String,
+        /// The key.
+        key: String,
+    },
+    /// [`Sheet::to_rows`] would make a grid over its cap.
+    #[error("sheet `{sheet}` needs a grid of {entries} entries; the cap is {max}")]
+    GridTooLarge {
+        /// The sheet.
+        sheet: SheetId,
+        /// The grid size (rows × columns).
+        entries: u64,
+        /// The cap.
+        max: usize,
+    },
 }
 
 /// A workbook (Univer `IWorkbookData`).
@@ -724,12 +864,12 @@ impl Workbook {
     /// The sheet with this id.
     #[must_use]
     pub fn sheet(&self, id: &str) -> Option<&Sheet> {
-        self.sheets.get(&SheetId::new(id))
+        self.sheets.get(id)
     }
 
     /// The sheet with this id, for changes.
     pub fn sheet_mut(&mut self, id: &str) -> Option<&mut Sheet> {
-        self.sheets.get_mut(&SheetId::new(id))
+        self.sheets.get_mut(id)
     }
 
     /// The sheets in tab order. Ids with no sheet are skipped.
@@ -780,15 +920,24 @@ impl Workbook {
         if let Some(id) = self.sheets.keys().find(|id| !seen.contains(id)) {
             return Err(WorkbookError::UnorderedSheet(id.clone()));
         }
-        let mut total = 0_usize;
+        if let Some(field) = reserved(&self.extra, &WORKBOOK_FIELDS) {
+            return Err(WorkbookError::ReservedKey {
+                place: String::from("the workbook"),
+                key: field.to_owned(),
+            });
+        }
+        // Count first, so an oversized workbook costs no per-cell work.
+        let total = self
+            .sheets
+            .values()
+            .fold(0_usize, |n, s| n.saturating_add(s.cell_count()));
+        if total > limits.max_cells {
+            return Err(WorkbookError::TooManyCells {
+                max: limits.max_cells,
+            });
+        }
         for (key, sheet) in &self.sheets {
             sheet.validate(key, limits)?;
-            total = total.saturating_add(sheet.cell_count());
-            if total > limits.max_cells {
-                return Err(WorkbookError::TooManyCells {
-                    max: limits.max_cells,
-                });
-            }
         }
         Ok(())
     }
@@ -837,7 +986,8 @@ impl WorkbookBuilder {
         self
     }
 
-    /// Sets an other top-level Univer field, for example `locale`.
+    /// Sets another top-level Univer field, for example `locale`.
+    /// [`WorkbookBuilder::build`] rejects a typed field name such as `id`.
     pub fn extra(mut self, key: impl Into<String>, value: Value) -> Self {
         self.workbook.extra.insert(key.into(), value);
         self
@@ -1082,16 +1232,150 @@ mod tests {
         );
         assert_eq!(
             s.to_rows(),
-            vec![
+            Ok(vec![
                 vec![Some("a".into()), Some("b".into())],
                 vec![None, None],
                 vec![Some(CellValue::Number(3.0)), None],
-            ]
+            ])
         );
         assert_eq!(
             Sheet::new("e", "E").to_rows(),
-            Vec::<Vec<Option<CellValue>>>::new()
+            Ok(Vec::<Vec<Option<CellValue>>>::new())
         );
+    }
+
+    #[test]
+    fn to_rows_refuses_a_huge_sparse_grid() {
+        // A tiny, valid snapshot whose dense grid needs about 400 GB.
+        let wb: Workbook = serde_json::from_value(json!({
+            "id": "w", "sheetOrder": ["s"],
+            "sheets": { "s": { "id": "s", "rowCount": 1_048_576, "columnCount": 16_384,
+                "cellData": { "1048575": { "16383": { "v": 1 } } } } }
+        }))
+        .expect("parses");
+        assert!(wb.validate().is_ok());
+        let sheet = wb.sheet("s").expect("s");
+        assert_eq!(
+            sheet.to_rows(),
+            Err(WorkbookError::GridTooLarge {
+                sheet: SheetId::new("s"),
+                entries: 1_048_576 * 16_384,
+                max: MAX_GRID,
+            })
+        );
+        let small = Sheet::new("t", "T").with_cell(1, 1, Cell::bool(true));
+        assert!(small.to_rows_with(4).is_ok());
+        assert!(matches!(
+            small.to_rows_with(3),
+            Err(WorkbookError::GridTooLarge {
+                entries: 4,
+                max: 3,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn cell_values_read_only_scalars() {
+        for (json, want) in [
+            (json!(true), Some(CellValue::Bool(true))),
+            (json!(1.5), Some(CellValue::Number(1.5))),
+            (json!(-7), Some(CellValue::Number(-7.0))),
+            (json!("x"), Some(CellValue::Text("x".into()))),
+        ] {
+            assert_eq!(serde_json::from_value::<CellValue>(json).ok(), want);
+        }
+        for bad in [json!([1]), json!({ "a": 1 })] {
+            let err = serde_json::from_value::<CellValue>(bad).expect_err("not a scalar");
+            assert!(
+                err.to_string().contains("boolean, number or string"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_canonical_cell_indexes_are_errors() {
+        // "01" and "1" would name the same row; one cell would be lost.
+        for bad in [
+            json!({ "01": { "0": { "v": 1 } }, "1": { "0": { "v": 2 } } }),
+            json!({ "+1": { "0": { "v": 1 } } }),
+            json!({ "1": { "00": { "v": 1 } } }),
+        ] {
+            let err = serde_json::from_value::<Workbook>(json!({
+                "id": "w", "sheetOrder": ["s"],
+                "sheets": { "s": { "id": "s", "cellData": bad } }
+            }))
+            .expect_err("rejected");
+            assert!(err.to_string().contains("index"), "{err}");
+        }
+    }
+
+    #[test]
+    fn extra_must_not_shadow_typed_fields() {
+        let err = Workbook::builder("w", "W")
+            .extra("id", json!("evil"))
+            .build()
+            .expect_err("reserved");
+        assert_eq!(
+            err,
+            WorkbookError::ReservedKey {
+                place: "the workbook".into(),
+                key: "id".into()
+            }
+        );
+        let mut sheet = Sheet::new("a", "A");
+        sheet.extra.insert("cellData".into(), json!({}));
+        let err = Workbook::builder("w", "W")
+            .sheet(sheet)
+            .build()
+            .expect_err("reserved");
+        assert!(
+            matches!(err, WorkbookError::ReservedKey { ref key, .. } if key == "cellData"),
+            "{err}"
+        );
+        let mut cell = Cell::number(1.0);
+        cell.extra.insert("v".into(), json!("x"));
+        let err = Workbook::builder("w", "W")
+            .sheet(Sheet::new("a", "A").with_cell(0, 0, cell))
+            .build()
+            .expect_err("reserved");
+        assert_eq!(
+            err.to_string(),
+            "`extra` of cell A1 of sheet `a` holds `v`, which is a typed field"
+        );
+    }
+
+    #[test]
+    fn cell_count_is_checked_before_cell_bounds() {
+        let mut wb = sample();
+        let s = wb.sheet_mut("a").expect("a");
+        s.set_cell(5, 5, Cell::text("x"));
+        s.row_count = 1;
+        assert_eq!(
+            wb.validate_with(&Limits::default().with_max_cells(1)),
+            Err(WorkbookError::TooManyCells { max: 1 })
+        );
+    }
+
+    #[test]
+    fn limits_setters_set_each_field() {
+        let l = Limits::default()
+            .with_max_sheets(1)
+            .with_max_rows(2)
+            .with_max_columns(3)
+            .with_max_cells(4);
+        assert_eq!(
+            (l.max_sheets, l.max_rows, l.max_columns, l.max_cells),
+            (1, 2, 3, 4)
+        );
+    }
+
+    #[test]
+    fn cell_type_codes_normalize() {
+        assert_eq!(CellType::from_code(1), CellType::Text);
+        assert_eq!(CellType::from_code(9), CellType::Other(9));
+        assert_eq!(CellType::ForceText.code(), 4);
     }
 
     #[test]

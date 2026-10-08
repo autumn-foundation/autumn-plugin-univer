@@ -51,7 +51,7 @@
 //!
 //! - Only the open-source sheets core preset is in. Univer Pro features
 //!   (XLSX import and export, collaboration, charts) are not.
-//! - The Univer version is pinned per plugin release (see
+//! - Each plugin release pins one Univer version (see
 //!   [`UNIVER_VERSION`]).
 //! - Without JavaScript, the page shows a `<noscript>` notice.
 

@@ -6,6 +6,7 @@
 use autumn_web::{Markup, html};
 
 use crate::assets::{INIT_JS, PLUGIN_CSS, UNIVER_ASSETS, UNIVER_CSS, UNIVER_JS};
+use crate::locale::Locale;
 
 /// Renders one `<script type="module">` tag for a bundled file.
 fn module_tag(path: &str) -> Markup {
@@ -27,6 +28,9 @@ fn module_tag(path: &str) -> Markup {
 /// and sets `globalThis.AutumnUniverLib`. Then `init.js` mounts every
 /// [`Spreadsheet`](crate::Spreadsheet) on the page.
 ///
+/// A `<meta name="autumn-univer-locales">` tag tells `init.js` which locale
+/// files this build holds, so it never asks for a missing file.
+///
 /// ```rust
 /// use autumn_plugin_univer::univer_script;
 ///
@@ -36,7 +40,9 @@ fn module_tag(path: &str) -> Markup {
 /// ```
 #[must_use]
 pub fn univer_script() -> Markup {
+    let locales: Vec<&str> = Locale::all().iter().map(|l| l.code()).collect();
     html! {
+        meta name="autumn-univer-locales" content=(locales.join(","));
         (module_tag(UNIVER_JS))
         (module_tag(INIT_JS))
     }
@@ -84,6 +90,20 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("not found"), "{html}");
+    }
+
+    #[test]
+    fn script_tags_list_the_compiled_locales() {
+        let html = univer_script().into_string();
+        let codes: Vec<&str> = Locale::all().iter().map(|l| l.code()).collect();
+        assert!(
+            html.contains(&format!(
+                r#"<meta name="autumn-univer-locales" content="{}">"#,
+                codes.join(",")
+            )),
+            "{html}"
+        );
+        assert!(codes.contains(&"en-US"));
     }
 
     #[test]

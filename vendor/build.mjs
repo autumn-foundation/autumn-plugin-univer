@@ -56,12 +56,63 @@ const licenseFile = (name) => {
   const file = readdirSync(dir).filter((f) => /^(license|licence|copying)/i.test(f)).sort()[0];
   return file ? readFileSync(join(dir, file), "utf8").trim() : null;
 };
+// Full license texts for packages that ship no license file. The texts are
+// the SPDX templates; the copyright line comes from package.json.
+const MIT = (holder) => `MIT License
+
+Copyright (c) ${holder}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.`;
+const ISC = (holder) => `ISC License
+
+Copyright (c) ${holder}
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.`;
+const templates = {
+  MIT,
+  ISC,
+  // Univer's own packages ship the full Apache-2.0 text; reuse it.
+  "Apache-2.0": (holder) => `Copyright (c) ${holder}\n\n${licenseFile("@univerjs/core")}`,
+};
+const fullText = (name, p) => {
+  const file = licenseFile(name);
+  if (file) return file;
+  const holder = (typeof p.author === "string" ? p.author : p.author?.name) ?? `the ${name} authors`;
+  const template = templates[p.license];
+  if (!template) throw new Error(`${name}: no license file and no template for ${p.license}`);
+  return template(holder);
+};
 let notices = "Third-party software in assets/dist (autumn-plugin-univer).\n";
 for (const name of names) {
   const p = packages.get(name);
   notices += `\n${"=".repeat(72)}\n${name}@${p.version} (${p.license ?? "see text"})\n${"=".repeat(72)}\n\n`;
-  const author = typeof p.author === "string" ? p.author : p.author?.name;
-  notices += (licenseFile(name) ?? `License: ${p.license}.${author ? ` Copyright (c) ${author}.` : ""} The package ships no license file.\nThe ${p.license} license text applies; see https://spdx.org/licenses/${p.license}.html`) + "\n";
+  notices += fullText(name, p) + "\n";
 }
 writeFileSync(join(dist, "THIRD-PARTY-LICENSES.txt"), notices);
 
@@ -101,7 +152,11 @@ const featureFor = (out) => {
   const src = outputs[out].entryPoint ?? "";
   const loc = src.match(/preset-sheets-core\/lib\/es\/locales\/([a-z]{2}-[A-Z]{2})\.js$/);
   if (loc) return loc[1] === "en-US" ? null : `locale-${loc[1].toLowerCase()}`;
-  if (/engine-render\/lib\/es\//.test(src)) return "hyphenation";
+  // Hyphenation pattern files start with their source region comment.
+  if (/engine-render\/lib\/es\//.test(src)) {
+    const head = readFileSync(join(here, src), "utf8").slice(0, 200);
+    if (head.includes("hyphenation/patterns/")) return "hyphenation";
+  }
   throw new Error(`unclassified lazy chunk ${out} (${src})`);
 };
 for (const imp of outputs[mainOut].imports) {

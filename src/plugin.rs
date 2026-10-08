@@ -214,6 +214,34 @@ mod tests {
         client.get(&url(INIT_JS)).send().await.assert_ok();
     }
 
+    #[autumn_web::get("/page")]
+    async fn page() -> autumn_web::Markup {
+        autumn_web::html! {
+            head { (crate::univer_stylesheet()) (crate::univer_script()) }
+            body { (crate::Spreadsheet::new("s").save_url("/s")) }
+        }
+    }
+
+    #[tokio::test]
+    async fn pages_keep_the_strict_default_csp() {
+        // The plugin needs no CSP change: no inline code, no eval.
+        let response = TestApp::new()
+            .plugin(UniverPlugin::new())
+            .routes(autumn_web::routes![page])
+            .build()
+            .get("/page")
+            .send()
+            .await;
+        response.assert_ok();
+        let csp = response
+            .header("content-security-policy")
+            .expect("CSP header");
+        assert!(csp.contains("script-src 'self'"), "{csp}");
+        assert!(!csp.contains("unsafe-eval"), "{csp}");
+        let html = response.text();
+        assert!(!html.contains("<script>"), "no inline script: {html}");
+    }
+
     #[test]
     fn plugin_name_is_stable() {
         assert_eq!(UniverPlugin::new().name(), PLUGIN_NAME);

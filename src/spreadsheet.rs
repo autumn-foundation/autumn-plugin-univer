@@ -2,8 +2,8 @@
 //!
 //! The markup holds only data attributes and a JSON data block. It holds no
 //! inline script and no `style=` attribute, so it works with the default
-//! Autumn CSP and with nonce mode. `init.js` reads the attributes and
-//! mounts Univer.
+//! Autumn CSP. (Univer itself adds `<style>` elements, so `style-src` needs
+//! `'unsafe-inline'`.) `init.js` reads the attributes and mounts Univer.
 
 use std::time::Duration;
 
@@ -87,27 +87,32 @@ impl Spreadsheet {
         self
     }
 
-    /// Loads the workbook JSON from this URL (`GET`, same origin).
+    /// Loads the workbook JSON from this URL (`GET`). `init.js` refuses a
+    /// URL with another origin.
     pub fn load_url(mut self, url: impl Into<String>) -> Self {
         self.source = Source::Url(url.into());
         self
     }
 
     /// POSTs the snapshot JSON to this URL after edits. Read it with
-    /// [`WorkbookSnapshot`](crate::WorkbookSnapshot).
+    /// [`WorkbookSnapshot`](crate::WorkbookSnapshot). `init.js` refuses a
+    /// URL with another origin.
     pub fn save_url(mut self, url: impl Into<String>) -> Self {
         self.save_url = Some(url.into());
         self
     }
 
     /// Sets the autosave delay after the last edit. The default is 1 s.
+    /// The delay is kept in 1 ms to 2³¹−1 ms (the browser timer range). It
+    /// has an effect only with a [`Spreadsheet::save_url`].
     pub const fn autosave(mut self, delay: Duration) -> Self {
         self.autosave = Some(delay);
         self
     }
 
     /// Turns off autosave. Save with a [`save_button`] or
-    /// `AutumnUniver.save(element)`.
+    /// `AutumnUniver.save(element)`. It has an effect only with a
+    /// [`Spreadsheet::save_url`].
     pub const fn manual_save(mut self) -> Self {
         self.autosave = Some(Duration::ZERO);
         self
@@ -133,7 +138,8 @@ impl Spreadsheet {
         self
     }
 
-    /// Blocks edits when `true`. A read-only sheet does not save.
+    /// Blocks edits when `true`. A read-only sheet does not save. This is a
+    /// browser setting: the save handler must still check access.
     pub const fn read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;
         self
@@ -177,9 +183,13 @@ impl Spreadsheet {
 
     /// The autosave delay in milliseconds, if the sheet saves.
     fn autosave_ms(&self) -> Option<u128> {
-        self.save_url
-            .as_ref()
-            .map(|_| self.autosave.unwrap_or(DEFAULT_AUTOSAVE).as_millis())
+        const MAX_TIMER_MS: u128 = (1 << 31) - 1;
+        self.save_url.as_ref().map(|_| {
+            match self.autosave.unwrap_or(DEFAULT_AUTOSAVE).as_millis() {
+                0 if self.autosave == Some(Duration::ZERO) => 0, // manual save
+                ms => ms.clamp(1, MAX_TIMER_MS),
+            }
+        })
     }
 
     /// Renders the markup.
@@ -375,6 +385,22 @@ mod tests {
         assert!(out.contains(r#"data-univer-autosave="1000""#), "{out}");
         let manual = html(&Spreadsheet::new("s").save_url("/s").manual_save());
         assert!(manual.contains(r#"data-univer-autosave="0""#), "{manual}");
+    }
+
+    #[test]
+    fn autosave_delays_stay_in_the_timer_range() {
+        let ms = |d| {
+            let out = html(&Spreadsheet::new("s").save_url("/s").autosave(d));
+            let start = out.find("data-univer-autosave=\"").expect("attr") + 22;
+            out[start..].split('"').next().expect("value").to_owned()
+        };
+        assert_eq!(
+            ms(Duration::from_micros(500)),
+            "1",
+            "not silent manual save"
+        );
+        assert_eq!(ms(Duration::from_secs(60 * 60 * 24 * 30)), "2147483647");
+        assert_eq!(ms(Duration::from_millis(250)), "250");
     }
 
     #[test]

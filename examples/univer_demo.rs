@@ -162,7 +162,11 @@ async fn report(csrf: Option<CsrfToken>) -> Markup {
     let budget = store()
         .lock()
         .map_or_else(|_| seed_budget(), |s| s.budget.clone());
-    let rows = budget.first_sheet().map(Sheet::to_rows).unwrap_or_default();
+    // `to_rows` has a size cap; a client controls the saved data.
+    let rows = budget
+        .first_sheet()
+        .and_then(|s| s.to_rows().ok())
+        .unwrap_or_default();
     layout(
         "Report",
         csrf.as_ref(),
@@ -202,14 +206,28 @@ async fn budget_json() -> Json<Workbook> {
     )
 }
 
+/// Refuses a snapshot of another workbook. (A real app also checks here
+/// that the user may save.)
+fn expect_id(workbook: &Workbook, id: &str) -> Result<(), AutumnError> {
+    if workbook.id.as_str() == id {
+        Ok(())
+    } else {
+        Err(AutumnError::unprocessable_msg(format!(
+            "expected workbook `{id}`"
+        )))
+    }
+}
+
 #[post("/budget")]
-async fn save_budget(WorkbookSnapshot(workbook): WorkbookSnapshot) -> Json<bool> {
+async fn save_budget(WorkbookSnapshot(workbook): WorkbookSnapshot) -> AutumnResult<Json<bool>> {
+    expect_id(&workbook, "budget")?;
     let ok = store().lock().map(|mut s| s.budget = workbook).is_ok();
-    Json(ok)
+    Ok(Json(ok))
 }
 
 #[post("/scratch")]
-async fn save_scratch(WorkbookSnapshot(workbook): WorkbookSnapshot) -> Json<bool> {
+async fn save_scratch(WorkbookSnapshot(workbook): WorkbookSnapshot) -> AutumnResult<Json<bool>> {
+    expect_id(&workbook, "scratch")?;
     let ok = store().lock().map(|mut s| s.scratch = workbook).is_ok();
-    Json(ok)
+    Ok(Json(ok))
 }

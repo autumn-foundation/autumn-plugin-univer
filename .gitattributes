@@ -1,0 +1,2 @@
+# Vendored bytes must match assets/manifest.json on every platform.
+assets/** -text

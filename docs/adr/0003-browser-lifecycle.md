@@ -27,8 +27,15 @@ inline code. System tests found three Univer 1.0 behaviors:
 - Read-only: `setEditable(false)` and
   `getWorkbookPermission().setReadOnly()` after `Rendered`.
 - A change is a `MUTATION` whose `params.unitId` is the sheet's workbook.
-- Saves are debounced, one at a time, versioned (an edit during a save
-  keeps the sheet dirty), with the Autumn CSRF header.
+- Saves are debounced and versioned (an edit during a save keeps the
+  sheet dirty), with the Autumn CSRF header.
+- JS maps track mounted and mounting sheets (not DOM markers). Each mount
+  has a token; a dispose or a removal during a mount frees the new
+  instance. A copy of live markup (htmx history) mounts again.
+- Saves run in one ordered chain per sheet. Waiting calls share one
+  request. Dispose queues the last snapshot after the save in progress.
+  Only `pagehide` uses `keepalive`, with one byte budget for all sheets.
+- Load and save URLs must be same-origin; saves use `redirect: "error"`.
 - Multi-sheet pages: only the active sheet (last `pointerdown` or
   `focusin`) keeps Univer's element ids. The others get the suffix
   `--autumn-inactive`.

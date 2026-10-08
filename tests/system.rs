@@ -4,7 +4,11 @@
 //! They need Chromium (see `autumn_web::system_test` for the lookup).
 
 // Test helpers outside `#[test]` functions may panic on setup errors.
-#![allow(clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::significant_drop_tightening
+)]
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -145,6 +149,20 @@ async fn french_page(csrf: Option<CsrfToken>) -> Markup {
     layout(csrf.as_ref(), &html! { (sheet) })
 }
 
+/// A known locale with no file in this build (no `locale-fr-fr`).
+#[cfg(not(feature = "locale-fr-fr"))]
+#[get("/missing-locale")]
+async fn missing_locale_page(csrf: Option<CsrfToken>) -> Markup {
+    layout(
+        csrf.as_ref(),
+        &html! {
+            div id="sheet" class="autumn-univer" data-univer data-univer-locale="fr-FR" {
+                div data-univer-mount {}
+            }
+        },
+    )
+}
+
 #[get("/htmx")]
 async fn htmx_page(csrf: Option<CsrfToken>) -> Markup {
     layout(
@@ -181,15 +199,18 @@ fn slow_log() -> &'static Mutex<HashMap<String, SlowLog>> {
     LOG.get_or_init(Mutex::default)
 }
 
+/// Counts a slow save that starts.
+fn begin_slow(key: &str) {
+    let mut log = slow_log().lock().expect("lock");
+    let entry = log.entry(key.to_owned()).or_default();
+    entry.in_flight += 1;
+    entry.max_in_flight = entry.max_in_flight.max(entry.in_flight);
+}
+
 /// Like `/save`, but takes 400 ms and logs each request.
 #[post("/slow-save/{key}")]
 async fn slow_save(Path(key): Path<String>, WorkbookSnapshot(wb): WorkbookSnapshot) -> Json<bool> {
-    {
-        let mut log = slow_log().lock().expect("lock");
-        let entry = log.entry(key.clone()).or_default();
-        entry.in_flight += 1;
-        entry.max_in_flight = entry.max_in_flight.max(entry.in_flight);
-    }
+    begin_slow(&key);
     tokio::time::sleep(Duration::from_millis(400)).await;
     let a2 = match wb.first_sheet().and_then(|s| s.value(1, 0)) {
         Some(autumn_plugin_univer::CellValue::Text(t)) => t.clone(),
@@ -276,6 +297,10 @@ async fn start() -> SystemTestRunner {
     #[cfg(feature = "locale-fr-fr")]
     {
         app = app.routes(routes![french_page]);
+    }
+    #[cfg(not(feature = "locale-fr-fr"))]
+    {
+        app = app.routes(routes![missing_locale_page]);
     }
     let router = app.build().into_router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -367,26 +392,12 @@ async fn mounts_under_the_default_csp_with_no_console_errors() {
     page.expect_no_console_errors()
         .await
         .expect("clean console");
-    // No save without an edit.
-    tokio::time::sleep(Duration::from_millis(600)).await;
+    // No save without an edit (autosave is 200 ms: wait well past it).
+    tokio::time::sleep(Duration::from_millis(1200)).await;
     assert!(
         saved().lock().expect("lock").get("mount").is_none(),
         "no spurious save"
     );
-}
-
-#[tokio::test]
-async fn the_page_carries_the_default_csp() {
-    let client = TestApp::new()
-        .plugin(UniverPlugin::new())
-        .routes(routes![sheet_page])
-        .build();
-    let response = client.get("/sheet/csp").send().await;
-    let csp = response
-        .header("content-security-policy")
-        .expect("CSP header");
-    assert!(csp.contains("script-src 'self'"), "{csp}");
-    assert!(!csp.contains("unsafe-eval"), "{csp}");
 }
 
 #[tokio::test]
@@ -433,8 +444,11 @@ async fn read_only_sheets_block_edits_and_never_save() {
     let page = runner.page().await.expect("page");
     page.visit("/readonly").await.expect("visit");
     wait_state(&page, "sheet", "ready").await;
+    // Univer's setValue returns the range even when the permission mode
+    // refuses the edit, so the check is on the value below.
     let _: bool = eval(&page, &set_js("sheet", "A1", "changed")).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Autosave is 100 ms: wait well past it.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
     let a1: f64 = eval(&page, &value_js("sheet", "A1")).await;
     assert!((a1 - 42.0).abs() < f64::EPSILON, "A1 unchanged: {a1}");
     let state: String = eval(
@@ -525,6 +539,12 @@ async fn unknown_locales_fall_back_to_en_us() {
     let page = runner.page().await.expect("page");
     page.visit("/locale").await.expect("visit");
     wait_state(&page, "sheet", "ready").await;
+    let locale: String = eval(
+        &page,
+        "AutumnUniver.get(document.getElementById('sheet')).univerAPI.getCurrentLocale()",
+    )
+    .await;
+    assert_eq!(locale, "enUS");
     page.expect_no_console_errors()
         .await
         .expect("a warning, not an error");
@@ -756,4 +776,26 @@ async fn a_cross_origin_save_url_is_refused() {
         errors.iter().any(|e| e.contains("not a same-origin URL")),
         "{errors:?}"
     );
+}
+
+#[cfg(not(feature = "locale-fr-fr"))]
+#[tokio::test]
+async fn a_locale_missing_from_the_build_is_not_fetched() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/missing-locale").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let locale: String = eval(
+        &page,
+        "AutumnUniver.get(document.getElementById('sheet')).univerAPI.getCurrentLocale()",
+    )
+    .await;
+    assert_eq!(locale, "enUS");
+    let fetched: bool = eval(
+        &page,
+        "performance.getEntriesByType('resource').some(e => /chunks\\/fr-FR-/.test(e.name))",
+    )
+    .await;
+    assert!(!fetched, "no request for a missing locale file");
+    page.expect_no_console_errors().await.expect("no 404");
 }

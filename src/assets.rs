@@ -213,6 +213,97 @@ mod tests {
         }
     }
 
+    /// `true` when the Cargo feature is on in this build.
+    fn enabled(feature: &str) -> bool {
+        match feature {
+            "hyphenation" => cfg!(feature = "hyphenation"),
+            "locale-ar-sa" => cfg!(feature = "locale-ar-sa"),
+            "locale-ca-es" => cfg!(feature = "locale-ca-es"),
+            "locale-de-de" => cfg!(feature = "locale-de-de"),
+            "locale-es-es" => cfg!(feature = "locale-es-es"),
+            "locale-fa-ir" => cfg!(feature = "locale-fa-ir"),
+            "locale-fr-fr" => cfg!(feature = "locale-fr-fr"),
+            "locale-id-id" => cfg!(feature = "locale-id-id"),
+            "locale-it-it" => cfg!(feature = "locale-it-it"),
+            "locale-ja-jp" => cfg!(feature = "locale-ja-jp"),
+            "locale-ko-kr" => cfg!(feature = "locale-ko-kr"),
+            "locale-pl-pl" => cfg!(feature = "locale-pl-pl"),
+            "locale-pt-br" => cfg!(feature = "locale-pt-br"),
+            "locale-ru-ru" => cfg!(feature = "locale-ru-ru"),
+            "locale-sk-sk" => cfg!(feature = "locale-sk-sk"),
+            "locale-vi-vn" => cfg!(feature = "locale-vi-vn"),
+            "locale-zh-cn" => cfg!(feature = "locale-zh-cn"),
+            "locale-zh-hk" => cfg!(feature = "locale-zh-hk"),
+            "locale-zh-tw" => cfg!(feature = "locale-zh-tw"),
+            other => panic!("unknown feature `{other}` in manifest.json: add it here"),
+        }
+    }
+
+    #[test]
+    fn files_of_disabled_features_are_not_compiled_in() {
+        let m = manifest();
+        let files = compiled();
+        for (feature, gated) in m["features"].as_object().expect("features map") {
+            for path in gated.as_array().expect("file list") {
+                let path = path.as_str().expect("path");
+                // A file shared by two features is in when either is on.
+                let wanted =
+                    m["features"]
+                        .as_object()
+                        .expect("features map")
+                        .iter()
+                        .any(|(f, list)| {
+                            enabled(f) && list.as_array().expect("list").iter().any(|p| p == path)
+                        });
+                assert_eq!(files.contains(path), wanted, "{path} (feature {feature})");
+            }
+        }
+    }
+
+    #[test]
+    fn every_static_import_is_compiled_in() {
+        // A static import that 404s breaks the module graph in the browser.
+        let files = compiled();
+        for asset in UNIVER_ASSETS
+            .iter()
+            .filter(|a| a.content_type().starts_with("text/javascript"))
+        {
+            let text = std::str::from_utf8(asset.bytes()).expect("utf-8");
+            let dir = asset.logical_path().rsplit_once('/').map_or("", |(d, _)| d);
+            for marker in ["from\"./", "import\"./"] {
+                for (i, _) in text.match_indices(marker) {
+                    let rest = &text[i + marker.len()..];
+                    let target = rest.split('"').next().expect("closing quote");
+                    let path = if dir.is_empty() {
+                        target.to_owned()
+                    } else {
+                        format!("{dir}/{target}")
+                    };
+                    assert!(
+                        files.contains(&path),
+                        "{} imports missing {path}",
+                        asset.logical_path()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn license_notices_cover_every_bundled_package() {
+        let text = std::str::from_utf8(UNIVER_ASSETS.get(LICENSES).expect("bundled").bytes())
+            .expect("utf-8");
+        let m = manifest();
+        for (name, version) in m["packages"].as_object().expect("packages") {
+            let heading = format!("{name}@{}", version.as_str().expect("version"));
+            assert!(text.contains(&heading), "notice for {heading}");
+        }
+        assert!(
+            !text.contains("ships no license file"),
+            "every notice has a full text"
+        );
+    }
+
     #[test]
     fn univer_js_exposes_the_library_global() {
         let js = UNIVER_ASSETS.get(UNIVER_JS).expect("bundled").bytes();

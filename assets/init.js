@@ -92,8 +92,14 @@ function nextFrames(count) {
   });
 }
 
+// Locale files in this build (from univer_script()). null: no list.
+const BUNDLED = (() => {
+  const meta = document.querySelector('meta[name="autumn-univer-locales"]');
+  return meta ? new Set((meta.getAttribute("content") || "").split(",")) : null;
+})();
+
 async function loadLocale(code) {
-  const loader = LIB.locales[code];
+  const loader = BUNDLED && !BUNDLED.has(code) ? undefined : LIB.locales[code];
   if (!loader) {
     if (code === "en-US") throw new Error("en-US is missing");
     console.warn(`autumn-univer: locale ${code} is not bundled; using en-US`);

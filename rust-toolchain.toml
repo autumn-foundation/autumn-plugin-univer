@@ -1,0 +1,4 @@
+# Pinned so new lints in a new Rust release cannot turn CI red. Bump on purpose.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

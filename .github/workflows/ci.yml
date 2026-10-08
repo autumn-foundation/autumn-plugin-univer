@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -36,10 +36,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo test
-      - run: cargo test --lib --doc --features all-locales,hyphenation
+      - run: cargo test --lib --features all-locales,hyphenation
+      - run: cargo test --doc --features all-locales,hyphenation
+      # Feature unification can turn this on in a host app.
+      - run: cargo test --lib --features serde_json/arbitrary_precision
       - run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
@@ -49,18 +52,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
       # ubuntu-latest ships Google Chrome; autumn_web::system_test finds it on PATH.
       - run: cargo test --features system-tests --test system
       - run: cargo test --features system-tests,all-locales --test system
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: system-test-artifacts
+          path: target/system-tests/
 
   coverage:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
@@ -74,7 +82,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --check assets/init.js
+      - run: node --input-type=module --check < assets/init.js
       - run: npm ci --ignore-scripts
         working-directory: vendor
       - run: npm run build
@@ -82,11 +90,22 @@ jobs:
       - name: Committed bundle matches the lockfile
         run: git diff --exit-code -- assets src/bundle_files.rs
 
+  msrv:
+    needs: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo +1.88.0 check --lib
+        env:
+          RUSTFLAGS: ""
+
   package:
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo package
