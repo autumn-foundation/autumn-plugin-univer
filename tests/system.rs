@@ -163,6 +163,21 @@ async fn missing_locale_page(csrf: Option<CsrfToken>) -> Markup {
     )
 }
 
+/// Hand-written markup: a data block and no mount child.
+#[get("/bare")]
+async fn bare_page(csrf: Option<CsrfToken>) -> Markup {
+    layout(
+        csrf.as_ref(),
+        &html! {
+            div id="sheet" class="autumn-univer" data-univer {
+                script type="application/json" data-univer-data {
+                    (maud::PreEscaped(r#"{"id":"bare","sheetOrder":["s"],"sheets":{"s":{"id":"s","cellData":{"0":{"0":{"v":42}}}}}}"#))
+                }
+            }
+        },
+    )
+}
+
 #[get("/htmx")]
 async fn htmx_page(csrf: Option<CsrfToken>) -> Markup {
     layout(
@@ -292,6 +307,7 @@ async fn start() -> SystemTestRunner {
             slow_save,
             slow_page,
             bad_data_page,
+            bare_page,
             cross_origin_page
         ]);
     #[cfg(feature = "locale-fr-fr")]
@@ -885,4 +901,58 @@ async fn unload_flushes_a_save_queued_by_dispose() {
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+#[tokio::test]
+async fn markup_without_a_mount_child_keeps_its_data() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/bare").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let a1: f64 = eval(&page, &value_js("sheet", "A1")).await;
+    assert!((a1 - 42.0).abs() < f64::EPSILON, "A1 = {a1}");
+}
+
+#[tokio::test]
+async fn an_explicit_dispose_and_mount_reads_the_new_data() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/sheet/newdata").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(
+        &page,
+        "(() => { const el = document.getElementById('sheet'); AutumnUniver.dispose(el); el.querySelector('script[data-univer-data]').textContent = JSON.stringify({ id: 'n', sheetOrder: ['s'], sheets: { s: { id: 's', cellData: { 0: { 0: { v: 99 } } } } } }); AutumnUniver.mount(el); return true; })()",
+    )
+    .await;
+    wait_state(&page, "sheet", "ready").await;
+    let a1: f64 = eval(&page, &value_js("sheet", "A1")).await;
+    assert!(
+        (a1 - 99.0).abs() < f64::EPSILON,
+        "the new data block wins: A1 = {a1}"
+    );
+}
+
+#[tokio::test]
+async fn an_aborted_remount_keeps_the_snapshot() {
+    let runner = start().await;
+    let page = runner.page().await.expect("page");
+    page.visit("/manual/abort").await.expect("visit");
+    wait_state(&page, "sheet", "ready").await;
+    let _: bool = eval(&page, &set_js("sheet", "A1", "EDIT")).await;
+    wait_state(&page, "sheet", "dirty").await;
+    // Remove, re-add, remove again while the re-mount loads, re-add.
+    let _: bool = eval(
+        &page,
+        "(() => { const el = document.getElementById('sheet'); el.remove(); setTimeout(() => { document.body.prepend(el); setTimeout(() => { el.remove(); setTimeout(() => document.body.prepend(el), 50); }, 0); }, 50); return true; })()",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    wait_for(
+        &page,
+        "AutumnUniver.get(document.getElementById('sheet')) !== undefined",
+    )
+    .await;
+    let a1: String = eval(&page, &value_js("sheet", "A1")).await;
+    assert_eq!(a1, "EDIT");
+    wait_state(&page, "sheet", "dirty").await;
 }

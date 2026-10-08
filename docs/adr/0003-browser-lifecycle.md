@@ -37,6 +37,11 @@ inline code. System tests found three Univer 1.0 behaviors:
   an earlier dispose).
 - Dispose keeps the last snapshot per element. A re-mount of the same
   element (a script moved it) starts from it, so it shows no stale data.
+  The snapshot holds only while the data source (data block or load URL)
+  is the same, and only until a mount succeeds. `AutumnUniver.dispose`
+  drops it, so an explicit re-mount reads the source again.
+- A new instance saves after the save chain of the last disposed instance
+  of the same element, so an old snapshot never arrives last.
 - Saves run in one ordered chain per sheet. Waiting calls share one
   request. Dispose queues the last snapshot after the save in progress.
   Dispose skips a version that the save in progress already holds.

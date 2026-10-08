@@ -21,9 +21,13 @@ const KEEPALIVE_MAX = 60000; // Browsers share 64 KiB for all keepalive bodies.
 
 const states = new Map(); // element -> state of a mounted sheet
 const mounting = new Map(); // element -> token of a mount in progress
-// element -> { json, dirty }: the last snapshot of a disposed sheet. A
-// re-mount of the same element (a script moved it) starts from it.
+// element -> { json, dirty, source }: the last snapshot of a sheet that
+// left the DOM. A re-mount of the same element (a script moved it) starts
+// from it, while the element still has the same data source.
 const carried = new WeakMap();
+// element -> save chain of its last disposed instance. A new instance
+// saves after it, so an old snapshot never arrives last.
+const tails = new WeakMap();
 // Saves that dispose queued behind a save in progress. pagehide sends them.
 const pending = new Set();
 
@@ -56,6 +60,12 @@ function clearMarkers(el) {
 
 function mountNode(el) {
   return el.querySelector(":scope > [data-univer-mount]") || el;
+}
+
+// The data source of a sheet: its data block text or its load URL.
+function source(el) {
+  const block = el.querySelector(":scope > script[data-univer-data]");
+  return block ? "data:" + block.textContent : "url:" + (attr(el, "load-url") || "");
 }
 
 // The URL, if it has the page's origin. Saves carry the CSRF token, so
@@ -145,14 +155,22 @@ async function mount(el) {
   // drops dead Univer DOM from markup copied from a live sheet.
   const host = document.createElement("div");
   host.className = "autumn-univer-host";
-  mountNode(el).replaceChildren(host);
+  const node = mountNode(el);
+  if (node !== el) {
+    node.replaceChildren(host);
+  } else {
+    // No mount child: keep the data block, drop only old hosts.
+    for (const old of el.querySelectorAll(":scope > .autumn-univer-host")) old.remove();
+    el.append(host);
+  }
   el.setAttribute("data-univer-init", "");
   setState(el, "loading");
   const height = attr(el, "height");
   if (height && CSS_LENGTH.test(height)) el.style.height = height;
   const live = () => mounting.get(el) === token && el.isConnected;
-  const carry = carried.get(el);
-  carried.delete(el);
+  const saved = carried.get(el);
+  const carry = saved && saved.source === source(el) ? saved : null;
+  if (saved && !carry) carried.delete(el); // The data source changed.
   try {
     const [data, locale] = await Promise.all([
       carry ? JSON.parse(carry.json) : loadData(el),
@@ -202,12 +220,14 @@ async function mount(el) {
       version: 0, // edit count
       savedVersion: 0, // edit count of the last good save
       timer: null,
-      chain: Promise.resolve(), // saves run one at a time, in order
+      chain: (tails.get(el) || Promise.resolve()).catch(() => false), // saves in order
       queued: null, // a save that waits in the chain
       force: false, // the queued save runs even with no new edits
       subscription: null,
     };
     if (carry && carry.dirty) state.version = 1; // unsaved manual edits
+    carried.delete(el); // Used only now: an aborted mount keeps it.
+    tails.delete(el);
     mounting.delete(el);
     states.set(el, state);
     const unitId = workbook.getId();
@@ -350,7 +370,7 @@ function dispose(el) {
     console.warn("autumn-univer: no snapshot at dispose", error);
   }
   const autosave = state.saveUrl && state.autosave > 0 && !state.readOnly;
-  if (json !== null) carried.set(el, { json, dirty: !autosave && dirty(state) });
+  if (json !== null) carried.set(el, { json, dirty: !autosave && dirty(state), source: source(el) });
   if (json !== null && autosave && dirty(state)) {
     const entry = { el, state, body: json, version: state.version, done: false };
     pending.add(entry);
@@ -362,6 +382,7 @@ function dispose(el) {
       return state.savedVersion >= entry.version ? true : send(el, state, json, entry.version);
     });
   }
+  tails.set(el, state.chain);
   states.delete(el);
   if (active === el) active = null;
   try {
@@ -468,7 +489,12 @@ new MutationObserver((records) => {
 
 globalThis.AutumnUniver = Object.freeze({
   mount,
-  dispose,
+  // An explicit dispose drops the snapshot: the next mount reads the data
+  // source again.
+  dispose: (el) => {
+    dispose(el);
+    carried.delete(el);
+  },
   save: (el) => save(el, { force: true }),
   scan,
   get: (el) => {

@@ -155,7 +155,8 @@ Each event fires on the sheet element and bubbles:
 The element also has `data-univer-state`: `loading`, `ready`, `dirty`,
 `saving`, `saved` or `error`. Use it in CSS.
 
-`window.AutumnUniver` has `mount(el)`, `dispose(el)`, `save(el)`,
+`window.AutumnUniver` has `mount(el)`, `dispose(el)` (the next mount reads
+the data block or load URL again), `save(el)`,
 `scan(root)` and `get(el)` (gives `{ univerAPI, workbook }`). Put custom
 code in an external file; the default CSP blocks inline scripts.
 
