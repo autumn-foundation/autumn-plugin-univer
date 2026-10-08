@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 416e41e7a46e967313df9d514ec837d3d99687fbc42c67657da2094822d37db0 # shrinks to wb = Workbook { id: WorkbookId("wb"), name: "W", sheet_order: [], sheets: {}, styles: {}, extra: {} }, extra = "A"
+cc ccfc7b9e866deeea6eb4b4f1b410adea2237448f0e244cc1a5b50311b1dd5b5b # shrinks to wb = Workbook { id: WorkbookId("wb"), name: "W", sheet_order: [SheetId("a")], sheets: {SheetId("a"): Sheet { id: SheetId("a"), name: "a", row_count: 1000, column_count: 20, cells: {0: {0: Cell { value: Some(Number(446959210427.97076)), kind: Some(Number), formula: None, style: None, extra: {} }}}, extra: {} }}, styles: {}, extra: {} }
