@@ -1,0 +1,211 @@
+// Builds the vendored Univer bundle. Run: `npm ci && npm run build`.
+//
+// Output (all generated, all committed):
+// - ../assets/dist/univer.js, chunks/*.js  ESM bundle (esbuild, code-split)
+// - ../assets/dist/univer.css              Univer sheets stylesheet
+// - ../assets/dist/THIRD-PARTY-LICENSES.txt license texts of bundled packages
+// - ../assets/manifest.json                versions and sha384 of each file
+// - ../src/bundle_files.rs                 the file list for PluginAssets
+//
+// The build is deterministic. CI runs it and fails on a diff.
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import * as esbuild from "esbuild";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const root = join(here, "..");
+const dist = join(root, "assets", "dist");
+const pkg = (name) => JSON.parse(readFileSync(join(here, "node_modules", name, "package.json"), "utf8"));
+
+rmSync(dist, { recursive: true, force: true });
+mkdirSync(dist, { recursive: true });
+
+const result = await esbuild.build({
+  entryPoints: { univer: join(here, "entry.js") },
+  absWorkingDir: here,
+  bundle: true,
+  minify: true,
+  format: "esm",
+  splitting: true,
+  target: "es2020",
+  legalComments: "none",
+  charset: "utf8",
+  define: { "process.env.NODE_ENV": '"production"' },
+  outdir: dist,
+  chunkNames: "chunks/[name]-[hash]",
+  metafile: true,
+  logLevel: "warning",
+});
+
+copyFileSync(join(here, "node_modules/@univerjs/preset-sheets-core/lib/index.css"), join(dist, "univer.css"));
+
+// Bundled npm packages, from the esbuild metafile.
+const packages = new Map();
+for (const input of Object.keys(result.metafile.inputs)) {
+  const m = input.match(/node_modules\/((?:@[^/]+\/)?[^/]+)\//);
+  if (m && !packages.has(m[1])) packages.set(m[1], pkg(m[1]));
+}
+packages.set("@univerjs/preset-sheets-core", pkg("@univerjs/preset-sheets-core"));
+const names = [...packages.keys()].sort();
+
+// License notices.
+const licenseFile = (name) => {
+  const dir = join(here, "node_modules", name);
+  const file = readdirSync(dir).filter((f) => /^(license|licence|copying)/i.test(f)).sort()[0];
+  return file ? readFileSync(join(dir, file), "utf8").trim() : null;
+};
+// Full license texts for packages that ship no license file. The texts are
+// the SPDX templates; the copyright line comes from package.json.
+const MIT = (holder) => `MIT License
+
+Copyright (c) ${holder}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.`;
+const ISC = (holder) => `ISC License
+
+Copyright (c) ${holder}
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.`;
+const templates = {
+  MIT,
+  ISC,
+  // Univer's own packages ship the full Apache-2.0 text; reuse it.
+  "Apache-2.0": (holder) => `Copyright (c) ${holder}\n\n${licenseFile("@univerjs/core")}`,
+};
+const fullText = (name, p) => {
+  const file = licenseFile(name);
+  if (file) return file;
+  const holder = (typeof p.author === "string" ? p.author : p.author?.name) ?? `the ${name} authors`;
+  const template = templates[p.license];
+  if (!template) throw new Error(`${name}: no license file and no template for ${p.license}`);
+  return template(holder);
+};
+let notices = "Third-party software in assets/dist (autumn-plugin-univer).\n";
+for (const name of names) {
+  const p = packages.get(name);
+  notices += `\n${"=".repeat(72)}\n${name}@${p.version} (${p.license ?? "see text"})\n${"=".repeat(72)}\n\n`;
+  notices += fullText(name, p) + "\n";
+}
+writeFileSync(join(dist, "THIRD-PARTY-LICENSES.txt"), notices);
+
+// Every output file, sorted by logical path.
+const walk = (dir) => readdirSync(dir).flatMap((f) => {
+  const full = join(dir, f);
+  return statSync(full).isDirectory() ? walk(full) : [full];
+});
+const files = walk(dist).map((f) => relative(dist, f).split("\\").join("/")).sort();
+const sri = (file) => "sha384-" + createHash("sha384").update(readFileSync(join(dist, file))).digest("base64");
+
+const manifest = {
+  library: "univer",
+  homepage: "https://univer.ai",
+  license: "Apache-2.0",
+  version: pkg("@univerjs/presets").version,
+  bundler: `esbuild@${pkg("esbuild").version}`,
+  notes: "Generated by vendor/build.mjs. Not served. Pins the bundled package versions and the sha384 of each file in assets/dist.",
+  packages: Object.fromEntries(names.map((n) => [n, packages.get(n).version])),
+  files: Object.fromEntries(files.map((f) => [f, sri(f)])),
+};
+// Feature gates. Each lazy chunk (and the chunks it imports) compiles in
+// only with the Cargo feature that needs it. Chunks of the main entry are
+// always in.
+const outputs = result.metafile.outputs;
+const logical = (out) => relative(dist, join(here, out)).split("\\").join("/");
+const closure = (out, seen = new Set()) => {
+  if (seen.has(out)) return seen;
+  seen.add(out);
+  for (const imp of outputs[out].imports) if (imp.kind === "import-statement" && outputs[imp.path]) closure(imp.path, seen);
+  return seen;
+};
+const mainOut = Object.keys(outputs).find((o) => o.endsWith("/univer.js"));
+const always = closure(mainOut);
+const gates = new Map(); // logical path -> Set of features
+const featureFor = (out) => {
+  const src = outputs[out].entryPoint ?? "";
+  const loc = src.match(/preset-sheets-core\/lib\/es\/locales\/([a-z]{2}-[A-Z]{2})\.js$/);
+  if (loc) return loc[1] === "en-US" ? null : `locale-${loc[1].toLowerCase()}`;
+  // Hyphenation pattern files start with their source region comment.
+  if (/engine-render\/lib\/es\//.test(src)) {
+    const head = readFileSync(join(here, src), "utf8").slice(0, 200);
+    if (head.includes("hyphenation/patterns/")) return "hyphenation";
+  }
+  throw new Error(`unclassified lazy chunk ${out} (${src})`);
+};
+for (const imp of outputs[mainOut].imports) {
+  if (imp.kind !== "dynamic-import") continue;
+  const feature = featureFor(imp.path);
+  for (const out of closure(imp.path)) {
+    if (always.has(out) || feature === null) continue;
+    const key = logical(out);
+    if (!gates.has(key)) gates.set(key, new Set());
+    gates.get(key).add(feature);
+  }
+}
+// A file that en-US needs is always in.
+for (const imp of outputs[mainOut].imports) {
+  if (imp.kind === "dynamic-import" && featureFor(imp.path) === null) {
+    for (const out of closure(imp.path)) gates.delete(logical(out));
+  }
+}
+const cfg = (file) => {
+  const set = gates.get(file);
+  if (!set) return "";
+  const fs = [...set].sort().map((f) => `feature = "${f}"`);
+  return `    #[cfg(${fs.length === 1 ? fs[0] : `any(${fs.join(", ")})`})]\n`;
+};
+const features = [...new Set([...gates.values()].flatMap((s) => [...s]))].sort();
+manifest.features = Object.fromEntries(features.map((f) => [f, [...gates].filter(([, s]) => s.has(f)).map(([k]) => k).sort()]));
+writeFileSync(join(root, "assets", "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
+
+// Rust file list. Plugin-authored files first, then the vendored files.
+const plugin = ["autumn-univer.css", "init.js"];
+for (const f of plugin) {
+  if (!existsSync(join(root, "assets", f))) throw new Error(`missing plugin file assets/${f}`);
+}
+const entries = [
+  ...plugin.map((f) => `    ("${f}", include_bytes!("../assets/${f}")),`),
+  ...files.map((f) => `${cfg(f)}    ("${f}", include_bytes!("../assets/dist/${f}")),`),
+];
+writeFileSync(join(root, "src", "bundle_files.rs"), `// @generated by vendor/build.mjs. Do not edit.
+
+//! Every file in the plugin asset bundle, as \`(logical path, bytes)\`.
+//!
+//! Lazy locale and hyphenation chunks compile in only with their Cargo
+//! feature.
+
+/// The bundle file list. \`vendor/build.mjs\` writes it.
+#[rustfmt::skip]
+pub(crate) static FILES: &[(&str, &[u8])] = &[
+${entries.join("\n")}
+];
+`);
+
+console.log(`univer ${manifest.version}: ${files.length} files, ${names.length} packages, ${features.length} features`);

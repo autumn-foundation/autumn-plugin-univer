@@ -1,0 +1,83 @@
+[package]
+name = "autumn-plugin-univer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Autumn plugin: Univer spreadsheets with Maud + htmx ergonomics and typed workbook data."
+license = "Apache-2.0"
+repository = "https://github.com/autumn-foundation/autumn-plugin-univer"
+keywords = ["autumn", "univer", "spreadsheet", "htmx", "plugin"]
+categories = ["web-programming"]
+exclude = [".github/", "docs/", "vendor/", "CLAUDE.md", "clippy.toml"]
+
+[features]
+default = []
+# Lazy locale packs (en-US is always in). Each adds about 0.7 MB.
+locale-ar-sa = []
+locale-ca-es = []
+locale-de-de = []
+locale-es-es = []
+locale-fa-ir = []
+locale-fr-fr = []
+locale-id-id = []
+locale-it-it = []
+locale-ja-jp = []
+locale-ko-kr = []
+locale-pl-pl = []
+locale-pt-br = []
+locale-ru-ru = []
+locale-sk-sk = []
+locale-vi-vn = []
+locale-zh-cn = []
+locale-zh-hk = []
+locale-zh-tw = []
+all-locales = ["locale-ar-sa", "locale-ca-es", "locale-de-de", "locale-es-es", "locale-fa-ir", "locale-fr-fr", "locale-id-id", "locale-it-it", "locale-ja-jp", "locale-ko-kr", "locale-pl-pl", "locale-pt-br", "locale-ru-ru", "locale-sk-sk", "locale-vi-vn", "locale-zh-cn", "locale-zh-hk", "locale-zh-tw"]
+# Hyphenation patterns for rich text (about 4.6 MB). Sheets seldom need them.
+hyphenation = []
+# Internal: Chromium system tests of this crate. Not for host apps.
+system-tests = ["autumn-web/system-tests"]
+
+[dependencies]
+# No default features: the host app selects the Autumn features.
+autumn-web = { version = "0.8", default-features = false, features = ["maud"] }
+# The `html!` macro expands to `maud::` paths.
+maud = "0.27"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+serde_path_to_error = "0.1"
+thiserror = "2"
+
+[dev-dependencies]
+autumn-web = { version = "0.8", default-features = false, features = ["maud", "htmx"] }
+base64 = "0.22"
+proptest = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "time"] }
+tower = { version = "0.5", features = ["util"] }
+
+[[test]]
+name = "system"
+path = "tests/system.rs"
+required-features = ["system-tests"]
+
+[[example]]
+name = "univer_demo"
+path = "examples/univer_demo.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+module_name_repetitions = "allow"
+redundant_pub_crate = "allow"

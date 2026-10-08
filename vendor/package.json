@@ -1,0 +1,20 @@
+{
+  "name": "autumn-plugin-univer-vendor",
+  "private": true,
+  "description": "Builds the vendored Univer bundle in ../assets/dist. Not published.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@univerjs/preset-sheets-core": "1.0.3",
+    "@univerjs/presets": "1.0.3",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "rxjs": "7.8.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10"
+  }
+}
