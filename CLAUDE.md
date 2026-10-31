@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Autumn (autumn-web 0.8) plugin that serves Univer 1.0 spreadsheets.
+Autumn (autumn-web 0.9) plugin that serves Univer 1.0 spreadsheets.
 
 ## Layout
 

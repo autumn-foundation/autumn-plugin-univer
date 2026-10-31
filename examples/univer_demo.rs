@@ -73,18 +73,20 @@ fn seed_budget() -> Workbook {
 
 #[autumn_web::main]
 async fn main() {
-    autumn_web::app()
-        .plugin(UniverPlugin::new())
-        .routes(routes![
-            index,
-            report,
-            scratch,
-            save_budget,
-            save_scratch,
-            budget_json
-        ])
-        .run()
-        .await;
+    Box::pin(
+        autumn_web::app()
+            .plugin(UniverPlugin::new())
+            .routes(routes![
+                index,
+                report,
+                scratch,
+                save_budget,
+                save_scratch,
+                budget_json
+            ])
+            .run(),
+    )
+    .await;
 }
 
 /// The page shell.
