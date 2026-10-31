@@ -16,7 +16,7 @@ keeps the data.
 
 ```toml
 [dependencies]
-autumn-plugin-univer = "0.1"
+autumn-plugin-univer = "0.2"
 ```
 
 Add the plugin, put the tags in `<head>`, and render a sheet:
@@ -179,7 +179,7 @@ the page.
 feature, about 0.7 MB each:
 
 ```toml
-autumn-plugin-univer = { version = "0.1", features = ["locale-fr-fr"] }
+autumn-plugin-univer = { version = "0.2", features = ["locale-fr-fr"] }
 ```
 
 Features: `locale-ar-sa`, `locale-ca-es`, `locale-de-de`, `locale-es-es`,
