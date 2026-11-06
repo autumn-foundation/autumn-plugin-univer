@@ -76,3 +76,8 @@ pub use workbook::{
     Cell, CellRef, CellType, CellValue, Limits, Sheet, SheetId, Workbook, WorkbookBuilder,
     WorkbookError, WorkbookId,
 };
+
+/// Compiles the Rust snippets of the README as doctests.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+pub struct ReadmeDoctests;

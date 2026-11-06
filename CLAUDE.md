@@ -32,6 +32,8 @@ cargo llvm-cov --lib --features all-locales,hyphenation
 
 ## Rules
 
+- README Rust snippets are doctests. Make them compile; use `no_run`, not `ignore`.
+  `tests/doc_snippets.rs` checks the TOML snippets and the version pins in the docs.
 - TDD: write the failing test first. Browser behavior needs a system test.
 - No inline `<script>` code and no `style=` attributes in markup (CSP).
 - After any `init.js` change, run the system tests.

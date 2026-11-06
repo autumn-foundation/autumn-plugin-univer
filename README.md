@@ -21,7 +21,7 @@ autumn-plugin-univer = "0.3"
 
 Add the plugin, put the tags in `<head>`, and render a sheet:
 
-```rust
+```rust,no_run
 use autumn_plugin_univer::{
     Cell, Sheet, Spreadsheet, UniverPlugin, Workbook, WorkbookSnapshot,
     univer_script, univer_stylesheet,
@@ -66,7 +66,12 @@ async fn main() {
 If CSRF is on, also put the token in `<head>`. `init.js` reads it:
 
 ```rust
-meta name="csrf-token" content=(csrf.token());
+use autumn_web::prelude::*;
+use autumn_web::security::CsrfToken;
+
+fn csrf_meta(csrf: &CsrfToken) -> Markup {
+    html! { meta name="csrf-token" content=(csrf.token()); }
+}
 ```
 
 ## Demo
