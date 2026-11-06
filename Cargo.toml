@@ -1,8 +1,8 @@
 [package]
 name = "autumn-plugin-univer"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 description = "Autumn plugin: Univer spreadsheets with Maud + htmx ergonomics and typed workbook data."
 license = "Apache-2.0"
 repository = "https://github.com/autumn-foundation/autumn-plugin-univer"
@@ -39,7 +39,7 @@ system-tests = ["autumn-web/system-tests"]
 
 [dependencies]
 # No default features: the host app selects the Autumn features.
-autumn-web = { version = "0.9", default-features = false, features = ["maud"] }
+autumn-web = { version = "0.10", default-features = false, features = ["maud"] }
 # The `html!` macro expands to `maud::` paths.
 maud = "0.27"
 serde = { version = "1", features = ["derive"] }
@@ -48,7 +48,7 @@ serde_path_to_error = "0.1"
 thiserror = "2"
 
 [dev-dependencies]
-autumn-web = { version = "0.9", default-features = false, features = ["maud", "htmx"] }
+autumn-web = { version = "0.10", default-features = false, features = ["maud", "htmx"] }
 base64 = "0.22"
 proptest = "1"
 sha2 = "0.10"

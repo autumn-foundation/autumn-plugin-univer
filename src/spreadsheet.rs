@@ -400,7 +400,7 @@ mod tests {
             "1",
             "not silent manual save"
         );
-        assert_eq!(ms(Duration::from_secs(60 * 60 * 24 * 30)), "2147483647");
+        assert_eq!(ms(Duration::from_hours(24 * 30)), "2147483647");
         assert_eq!(ms(Duration::from_millis(250)), "250");
     }
 
